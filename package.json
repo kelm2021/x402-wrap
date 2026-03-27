@@ -7,18 +7,26 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio",
+    "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
     "dotenv": "^16.4.7",
+    "drizzle-kit": "^0.31.10",
+    "drizzle-orm": "^0.45.1",
     "hono": "^4.7.7",
     "ioredis": "^5.4.2",
     "nanoid": "^5.1.5",
+    "postgres": "^3.4.8",
     "x402": "^1.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "ioredis-mock": "^8.13.1",
     "tsx": "^4.19.3",
     "typescript": "^5.8.3",
     "vitest": "^3.1.1"

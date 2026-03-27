@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import { getPort } from "./lib/env.js";
 import { proxyRoute } from "./routes/proxy.js";
 import { registerRoute } from "./routes/register.js";
+import { usageRoute } from "./routes/usage.js";
 
 try {
   const dotenv = await import("dotenv");
@@ -18,6 +19,7 @@ export function createApp() {
   app.get("/", (c) => c.json({ ok: true, service: "x402-wrap" }));
   app.route("/register", registerRoute);
   app.route("/p", proxyRoute);
+  app.route("/usage", usageRoute);
 
   return app;
 }

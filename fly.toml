@@ -1,0 +1,37 @@
+app = "x402-wrap"
+primary_region = "iad"
+
+[build]
+
+[env]
+  PORT = "3402"
+  NODE_ENV = "production"
+  NETWORK = "base-sepolia"
+
+[http_service]
+  internal_port = 3402
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 25
+    soft_limit = 20
+
+[[vm]]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1
+
+[checks]
+  [checks.health]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/"
+    port = 3402
+    timeout = "5s"
+    type = "http"

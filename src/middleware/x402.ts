@@ -31,7 +31,7 @@ interface X402ChallengeResponse {
     payTo: string;
     maxTimeoutSeconds: number;
     asset: `0x${string}`;
-    extra: null;
+    extra: { name: string; version: string } | null;
   }>;
 }
 
@@ -107,6 +107,7 @@ function buildPaymentRequirements(
     payTo: walletAddress,
     maxTimeoutSeconds: 300,
     asset: NETWORK_ASSET_ADDRESS[network],
+    extra: network === "base" ? { name: "USD Coin", version: "2" } : { name: "USDC", version: "2" },
   };
 }
 
@@ -128,7 +129,7 @@ function buildChallengeBody(
         payTo: paymentRequirements.payTo,
         maxTimeoutSeconds: paymentRequirements.maxTimeoutSeconds,
         asset: paymentRequirements.asset as `0x${string}`,
-        extra: null,
+        extra: (paymentRequirements.extra as { name: string; version: string } | null) ?? { name: "USD Coin", version: "2" },
       },
     ],
   };
@@ -150,8 +151,12 @@ export async function verifyPaymentHeader(
   paymentRequirements: PaymentRequirements,
 ): Promise<VerifyResponse> {
   const paymentPayload = decodePayment(paymentHeader);
+  console.log("[x402] paymentRequirements:", JSON.stringify(paymentRequirements));
+  console.log("[x402] FACILITATOR_URL:", process.env.FACILITATOR_URL ?? "https://x402.org/facilitator");
   const facilitator = getFacilitatorClient();
-  return facilitator.verify(paymentPayload, paymentRequirements);
+  const result = await facilitator.verify(paymentPayload, paymentRequirements);
+  console.log("[x402] verify result:", JSON.stringify(result));
+  return result;
 }
 
 export const x402Internals = {
@@ -163,7 +168,7 @@ export function x402Middleware(price: string, walletAddress: string): Middleware
     const paymentRequirements = buildPaymentRequirements(
       price,
       walletAddress,
-      c.req.url,
+      (process.env.BASE_URL ?? "") + new URL(c.req.url).pathname,
     );
     const paymentHeader = c.req.header("x-payment");
 
@@ -174,12 +179,14 @@ export function x402Middleware(price: string, walletAddress: string): Middleware
     try {
       const result = await x402Internals.verifyPaymentHeader(paymentHeader, paymentRequirements);
       if (!result.isValid) {
+        console.error("[x402] Verify failed:", JSON.stringify(result));
         return c.json(
           buildChallengeBody(paymentRequirements, verificationErrorMessage(result)),
           402,
         );
       }
     } catch (error) {
+      console.error("[x402] Verify exception:", error);
       if (error instanceof VerifyError) {
         return c.json(
           buildChallengeBody(paymentRequirements, verificationErrorMessage(error)),
