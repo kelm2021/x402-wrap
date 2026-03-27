@@ -4,12 +4,19 @@ const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
 const useMock = redisUrl === "mock" || process.env.REDIS_MOCK === "true";
 const REDIS_CACHE_TTL = 3600; // 1 hour
 
+// In-memory fallback for mock/dev mode (no ioredis-mock dependency)
+class InMemoryRedis {
+  private store = new Map<string, string>();
+  async get(key: string) { return this.store.get(key) ?? null; }
+  async set(key: string, value: string) { this.store.set(key, value); return "OK"; }
+  async incr(key: string) { const v = parseInt(this.store.get(key) ?? "0", 10) + 1; this.store.set(key, String(v)); return v; }
+  async expire(_key: string, _ttl: number) { return 1; }
+}
+
 // Dynamically pick real or mock client
 const createClient = async () => {
   if (useMock) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { default: IORedisMock } = await import("ioredis-mock" as any);
-    return new IORedisMock();
+    return new InMemoryRedis();
   } else {
     const { default: Redis } = await import("ioredis");
     return new Redis(redisUrl, { lazyConnect: true });
