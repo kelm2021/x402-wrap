@@ -1,0 +1,198 @@
+import type { MiddlewareHandler } from "hono";
+import { decodePayment } from "x402/schemes";
+import type { PaymentRequirements, VerifyResponse } from "x402/types";
+import { VerifyError } from "x402/types";
+import { useFacilitator } from "x402/verify";
+
+const X402_VERSION = 1;
+const DEFAULT_NETWORK = "base-sepolia";
+const DEFAULT_FACILITATOR_URL = "https://x402.org/facilitator";
+const CDP_FACILITATOR_URL = "https://api.cdp.coinbase.com/platform/v2/x402";
+const USDC_DECIMALS = 6n;
+const USDC_MULTIPLIER = 10n ** USDC_DECIMALS;
+
+const NETWORK_ASSET_ADDRESS: Record<string, `0x${string}`> = {
+  base: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  "base-sepolia": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+};
+
+type SupportedNetwork = keyof typeof NETWORK_ASSET_ADDRESS;
+
+interface X402ChallengeResponse {
+  x402Version: number;
+  error: string;
+  accepts: Array<{
+    scheme: "exact";
+    network: SupportedNetwork;
+    maxAmountRequired: string;
+    resource: string;
+    description: string;
+    mimeType: "application/json";
+    payTo: string;
+    maxTimeoutSeconds: number;
+    asset: `0x${string}`;
+    extra: null;
+  }>;
+}
+
+function getNetwork(): PaymentRequirements["network"] {
+  const network = process.env.NETWORK ?? DEFAULT_NETWORK;
+  if (network in NETWORK_ASSET_ADDRESS) {
+    return network as PaymentRequirements["network"];
+  }
+
+  return DEFAULT_NETWORK;
+}
+
+function getFacilitatorClient() {
+  const cdpApiKey = process.env.CDP_API_KEY;
+  const facilitatorUrl =
+    process.env.FACILITATOR_URL ??
+    (cdpApiKey ? CDP_FACILITATOR_URL : DEFAULT_FACILITATOR_URL);
+  const facilitatorResource = facilitatorUrl as `${string}://${string}`;
+
+  return useFacilitator(
+    cdpApiKey
+      ? {
+          url: facilitatorResource,
+          createAuthHeaders: async () => ({
+            verify: {
+              Authorization: `Bearer ${cdpApiKey}`,
+            },
+            settle: {
+              Authorization: `Bearer ${cdpApiKey}`,
+            },
+            supported: {
+              Authorization: `Bearer ${cdpApiKey}`,
+            },
+          }),
+        }
+      : {
+          url: facilitatorResource,
+        },
+  );
+}
+
+function usdToAtomicUnits(price: string): string {
+  const normalized = price.trim();
+  if (!/^\d+(\.\d+)?$/.test(normalized)) {
+    throw new Error(`Invalid USDC price: ${price}`);
+  }
+
+  const [wholePart, fractionalPart = ""] = normalized.split(".");
+  if (fractionalPart.length > Number(USDC_DECIMALS)) {
+    throw new Error(`USDC price supports at most ${USDC_DECIMALS} decimal places`);
+  }
+
+  const wholeUnits = BigInt(wholePart) * USDC_MULTIPLIER;
+  const fractionalUnits = BigInt(fractionalPart.padEnd(Number(USDC_DECIMALS), "0"));
+
+  return (wholeUnits + fractionalUnits).toString();
+}
+
+function buildPaymentRequirements(
+  price: string,
+  walletAddress: string,
+  resource: string,
+): PaymentRequirements {
+  const network = getNetwork();
+
+  return {
+    scheme: "exact",
+    network,
+    maxAmountRequired: usdToAtomicUnits(price),
+    resource,
+    description: "x402 Wrap proxy payment",
+    mimeType: "application/json",
+    payTo: walletAddress,
+    maxTimeoutSeconds: 300,
+    asset: NETWORK_ASSET_ADDRESS[network],
+  };
+}
+
+function buildChallengeBody(
+  paymentRequirements: PaymentRequirements,
+  error: string,
+): X402ChallengeResponse {
+  return {
+    x402Version: X402_VERSION,
+    error,
+    accepts: [
+      {
+        scheme: paymentRequirements.scheme,
+        network: paymentRequirements.network as SupportedNetwork,
+        maxAmountRequired: paymentRequirements.maxAmountRequired,
+        resource: paymentRequirements.resource,
+        description: paymentRequirements.description,
+        mimeType: "application/json",
+        payTo: paymentRequirements.payTo,
+        maxTimeoutSeconds: paymentRequirements.maxTimeoutSeconds,
+        asset: paymentRequirements.asset as `0x${string}`,
+        extra: null,
+      },
+    ],
+  };
+}
+
+function verificationErrorMessage(
+  result?: { invalidReason?: string },
+  fallback = "Payment required",
+): string {
+  if (result?.invalidReason) {
+    return `Payment verification failed: ${result.invalidReason}`;
+  }
+
+  return fallback;
+}
+
+export async function verifyPaymentHeader(
+  paymentHeader: string,
+  paymentRequirements: PaymentRequirements,
+): Promise<VerifyResponse> {
+  const paymentPayload = decodePayment(paymentHeader);
+  const facilitator = getFacilitatorClient();
+  return facilitator.verify(paymentPayload, paymentRequirements);
+}
+
+export const x402Internals = {
+  verifyPaymentHeader,
+};
+
+export function x402Middleware(price: string, walletAddress: string): MiddlewareHandler {
+  return async (c, next) => {
+    const paymentRequirements = buildPaymentRequirements(
+      price,
+      walletAddress,
+      c.req.url,
+    );
+    const paymentHeader = c.req.header("x-payment");
+
+    if (!paymentHeader) {
+      return c.json(buildChallengeBody(paymentRequirements, "Payment required"), 402);
+    }
+
+    try {
+      const result = await x402Internals.verifyPaymentHeader(paymentHeader, paymentRequirements);
+      if (!result.isValid) {
+        return c.json(
+          buildChallengeBody(paymentRequirements, verificationErrorMessage(result)),
+          402,
+        );
+      }
+    } catch (error) {
+      if (error instanceof VerifyError) {
+        return c.json(
+          buildChallengeBody(paymentRequirements, verificationErrorMessage(error)),
+          402,
+        );
+      }
+
+      return c.json(
+        buildChallengeBody(paymentRequirements, "Payment verification failed"),
+        402,
+      );
+    }
+
+    await next();
+  };
+}
