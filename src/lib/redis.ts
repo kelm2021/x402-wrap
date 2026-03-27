@@ -8,9 +8,15 @@ const REDIS_CACHE_TTL = 3600; // 1 hour
 class InMemoryRedis {
   private store = new Map<string, string>();
   async get(key: string) { return this.store.get(key) ?? null; }
-  async set(key: string, value: string) { this.store.set(key, value); return "OK"; }
+  async set(key: string, value: string) { this.store.set(key, value); return "OK" as const; }
   async incr(key: string) { const v = parseInt(this.store.get(key) ?? "0", 10) + 1; this.store.set(key, String(v)); return v; }
   async expire(_key: string, _ttl: number) { return 1; }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  scan(_cursor: string, ..._args: any[]): any {
+    return Promise.resolve(["0", [...this.store.keys()]]);
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  mget(...keys: any[]): any { return Promise.resolve(keys.map((k: string) => this.store.get(k) ?? null)); }
 }
 
 // Dynamically pick real or mock client
