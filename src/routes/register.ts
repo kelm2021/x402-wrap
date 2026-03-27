@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { nanoid } from "nanoid";
 
 import { encryptHeaders } from "../lib/crypto.js";
+import { submitToBazaar } from "../lib/bazaar.js";
 import { getBaseUrl } from "../lib/env.js";
 import { saveEndpoint } from "../lib/redis.js";
 import type { RegisterPayload } from "../lib/types.js";
@@ -37,8 +38,14 @@ registerRoute.post("/", async (c) => {
     encryptedHeaders,
   });
 
+  const baseUrl = getBaseUrl();
+  const proxyUrl = `${baseUrl}/p/${endpointId}/*`;
+  void submitToBazaar(endpointId, proxyUrl, body.price);
+
   return c.json({
     endpointId,
-    proxyUrl: `${getBaseUrl()}/p/${endpointId}/*`,
+    proxyUrl,
+    discoveryUrl: `${baseUrl}/.well-known/x402.json`,
+    bazaarHint: "Endpoint discoverable via x402-wrap discovery catalog",
   });
 });

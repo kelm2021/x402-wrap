@@ -18,6 +18,12 @@ const createClient = async () => {
 
 let _client: Awaited<ReturnType<typeof createClient>> | null = null;
 
+export interface StoredEndpoint {
+  endpointId: string;
+  config: EndpointConfig;
+  createdAt: string | null;
+}
+
 export async function getClient() {
   if (!_client) _client = await createClient();
   return _client;
@@ -105,4 +111,61 @@ export async function getEndpoint(endpointId: string): Promise<EndpointConfig | 
   }
 
   return null;
+}
+
+export async function listAllEndpoints(): Promise<StoredEndpoint[]> {
+  try {
+    const { getDb } = await import("./db.js");
+    const { endpoints } = await import("./schema.js");
+    const db = getDb();
+    if (db) {
+      const rows = await db.select().from(endpoints);
+      return rows.map((row) => ({
+        endpointId: row.id,
+        config: {
+          originUrl: row.originUrl,
+          price: row.price,
+          walletAddress: row.walletAddress,
+          pathPattern: row.pathPattern,
+          encryptedHeaders: row.encryptedHeaders as EndpointConfig["encryptedHeaders"],
+        },
+        createdAt: row.createdAt.toISOString(),
+      }));
+    }
+  } catch (err) {
+    console.debug("[redis] Postgres list skipped:", (err as Error).message);
+  }
+
+  const client = await getClient();
+  const keys = new Set<string>();
+  let cursor = "0";
+
+  do {
+    const result = await client.scan(cursor, "MATCH", "endpoint:*", "COUNT", 100);
+    cursor = result[0];
+    for (const key of result[1]) {
+      keys.add(key);
+    }
+  } while (cursor !== "0");
+
+  const endpointKeys = [...keys];
+  if (endpointKeys.length === 0) {
+    return [];
+  }
+
+  const rawConfigs = await client.mget(...endpointKeys);
+  return endpointKeys.flatMap((key, index) => {
+    const raw = rawConfigs[index];
+    if (!raw) {
+      return [];
+    }
+
+    return [
+      {
+        endpointId: key.replace(/^endpoint:/, ""),
+        config: JSON.parse(raw) as EndpointConfig,
+        createdAt: null,
+      },
+    ];
+  });
 }
