@@ -15,6 +15,41 @@ vi.mock("ioredis", () => {
       redisData.set(key, value);
       return "OK";
     }
+
+    async incr(key: string) {
+      const val = parseInt(redisData.get(key) ?? "0", 10) + 1;
+      redisData.set(key, String(val));
+      return val;
+    }
+
+    async expire(_key: string, _ttl: number) {
+      return 1;
+    }
+  }
+
+  return { default: MockRedis };
+});
+
+vi.mock("ioredis-mock", () => {
+  class MockRedis {
+    async get(key: string) {
+      return redisData.get(key) ?? null;
+    }
+
+    async set(key: string, value: string) {
+      redisData.set(key, value);
+      return "OK";
+    }
+
+    async incr(key: string) {
+      const val = parseInt(redisData.get(key) ?? "0", 10) + 1;
+      redisData.set(key, String(val));
+      return val;
+    }
+
+    async expire(_key: string, _ttl: number) {
+      return 1;
+    }
   }
 
   return { default: MockRedis };
