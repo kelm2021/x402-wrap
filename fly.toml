@@ -7,6 +7,7 @@ primary_region = "iad"
   PORT = "3402"
   NODE_ENV = "production"
   NETWORK = "base"
+  REDIS_URL = "rediss://default:gQAAAAAAAVNkAAIncDI3Y2E3NTdmNTQ0M2Q0NDcwYjJkZjIyNzhjNDgwNzFjNnAyODY4ODQ@suited-kite-86884.upstash.io:6380"
 
 [http_service]
   internal_port = 3402
