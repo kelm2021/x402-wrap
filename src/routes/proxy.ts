@@ -37,11 +37,10 @@ proxyRoute.all("/:endpointId/*", async (c) => {
       async () => {
         upstreamResponse = await forwardRequest(c, config);
         statusCode = upstreamResponse.status;
-        c.res = upstreamResponse;
       },
     );
 
-    const finalResponse = middlewareResponse ?? upstreamResponse ?? c.res;
+    const finalResponse = middlewareResponse ?? upstreamResponse;
     if (middlewareResponse) {
       statusCode = (middlewareResponse as Response).status;
     }
@@ -55,7 +54,8 @@ proxyRoute.all("/:endpointId/*", async (c) => {
     });
 
     return finalResponse;
-  } catch {
+  } catch (err) {
+    console.error("[proxy] upstream error:", err);
     trackRequest({
       endpointId,
       requestPath: c.req.path,
