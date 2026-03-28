@@ -9,7 +9,7 @@ import { x402Middleware } from "../middleware/x402.js";
 import type { RegisterPayload } from "../lib/types.js";
 
 // Platform wallet — registration fee goes here
-const PLATFORM_WALLET = (process.env.PLATFORM_WALLET ?? "0xCd20cb3520029a210708C36fa3f2F050414c4B12") as `0x${string}`;
+const PLATFORM_WALLET = (process.env.PLATFORM_WALLET ?? "0x348Df429BD49A7506128c74CE1124A81B4B7dC9d") as `0x${string}`;
 const REGISTRATION_FEE = process.env.REGISTRATION_FEE ?? "1";
 
 function hasStringRecord(value: unknown): value is Record<string, string> {
