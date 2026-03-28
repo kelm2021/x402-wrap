@@ -6,7 +6,7 @@ primary_region = "iad"
 [env]
   PORT = "3402"
   NODE_ENV = "production"
-  NETWORK = "base-sepolia"
+  NETWORK = "base"
 
 [http_service]
   internal_port = 3402
