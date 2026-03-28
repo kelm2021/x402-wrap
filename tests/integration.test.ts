@@ -7,7 +7,6 @@ const verifyPaymentHeaderMock = vi.fn();
 
 // Mock the redis module directly so app and tests share the same store
 vi.mock("../src/lib/redis.js", async () => {
-  const { EndpointConfig } = await vi.importActual<typeof import("../src/lib/types.js")>("../src/lib/types.js").catch(() => ({ EndpointConfig: null }));
   return {
     getClient: async () => ({
       get: async (key: string) => redisData.get(key) ?? null,

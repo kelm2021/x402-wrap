@@ -1,5 +1,6 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 
 import { getPort } from "./lib/env.js";
 import { discoveryRoute } from "./routes/discovery.js";
@@ -16,6 +17,14 @@ try {
 
 export function createApp() {
   const app = new Hono();
+
+  app.use("*", cors({
+    origin: ["https://wrap.aurelianflo.com", "http://localhost:3000"],
+    allowMethods: ["GET", "POST", "OPTIONS"],
+    allowHeaders: ["Content-Type", "X-PAYMENT", "Authorization"],
+    exposeHeaders: ["X-402-Version"],
+    maxAge: 86400,
+  }));
 
   app.get("/", (c) => c.json({ ok: true, service: "x402-wrap" }));
   app.route("/.well-known/x402.json", discoveryRoute);
