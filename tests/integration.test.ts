@@ -5,54 +5,35 @@ import { createServer } from "node:http";
 const redisData = new Map<string, string>();
 const verifyPaymentHeaderMock = vi.fn();
 
-vi.mock("ioredis", () => {
-  class MockRedis {
-    async get(key: string) {
-      return redisData.get(key) ?? null;
-    }
-
-    async set(key: string, value: string) {
-      redisData.set(key, value);
-      return "OK";
-    }
-
-    async incr(key: string) {
-      const val = parseInt(redisData.get(key) ?? "0", 10) + 1;
-      redisData.set(key, String(val));
-      return val;
-    }
-
-    async expire(_key: string, _ttl: number) {
-      return 1;
-    }
-  }
-
-  return { default: MockRedis };
-});
-
-vi.mock("ioredis-mock", () => {
-  class MockRedis {
-    async get(key: string) {
-      return redisData.get(key) ?? null;
-    }
-
-    async set(key: string, value: string) {
-      redisData.set(key, value);
-      return "OK";
-    }
-
-    async incr(key: string) {
-      const val = parseInt(redisData.get(key) ?? "0", 10) + 1;
-      redisData.set(key, String(val));
-      return val;
-    }
-
-    async expire(_key: string, _ttl: number) {
-      return 1;
-    }
-  }
-
-  return { default: MockRedis };
+// Mock the redis module directly so app and tests share the same store
+vi.mock("../src/lib/redis.js", async () => {
+  const { EndpointConfig } = await vi.importActual<typeof import("../src/lib/types.js")>("../src/lib/types.js").catch(() => ({ EndpointConfig: null }));
+  return {
+    getClient: async () => ({
+      get: async (key: string) => redisData.get(key) ?? null,
+      set: async (key: string, value: string) => { redisData.set(key, value); return "OK"; },
+      incr: async (key: string) => { const v = parseInt(redisData.get(key) ?? "0", 10) + 1; redisData.set(key, String(v)); return v; },
+      expire: async () => 1,
+      scan: async () => ["0", [...redisData.keys()]],
+      mget: async (...keys: string[]) => keys.map((k) => redisData.get(k) ?? null),
+    }),
+    saveEndpoint: async (endpointId: string, config: unknown) => {
+      redisData.set(`endpoint:${endpointId}`, JSON.stringify(config));
+    },
+    getEndpoint: async (endpointId: string) => {
+      const raw = redisData.get(`endpoint:${endpointId}`);
+      return raw ? JSON.parse(raw) : null;
+    },
+    listAllEndpoints: async () => {
+      const results = [];
+      for (const [key, value] of redisData.entries()) {
+        if (key.startsWith("endpoint:")) {
+          results.push({ endpointId: key.replace("endpoint:", ""), config: JSON.parse(value), createdAt: null });
+        }
+      }
+      return results;
+    },
+  };
 });
 
 vi.mock("x402/types", async () => {
