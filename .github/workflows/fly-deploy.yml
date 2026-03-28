@@ -33,7 +33,12 @@ jobs:
         uses: superfly/flyctl-actions/setup-flyctl@master
 
       - name: Set Fly secrets
-        run: flyctl secrets set BASE_URL="https://wrap-api.aurelianflo.com" --app x402-wrap
+        run: |
+          flyctl secrets set \
+            BASE_URL="https://wrap-api.aurelianflo.com" \
+            CDP_API_KEY_ID="${{ secrets.CDP_API_KEY_ID }}" \
+            CDP_API_KEY_SECRET="${{ secrets.CDP_API_KEY_SECRET }}" \
+            --app x402-wrap
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 

@@ -8,6 +8,7 @@ const X402_VERSION = 1;
 const DEFAULT_NETWORK = "base-sepolia";
 const DEFAULT_FACILITATOR_URL = "https://x402.org/facilitator";
 const CDP_FACILITATOR_URL = "https://api.cdp.coinbase.com/platform/v2/x402";
+const CDP_FACILITATOR_HOST = "api.cdp.coinbase.com";
 const USDC_DECIMALS = 6n;
 const USDC_MULTIPLIER = 10n ** USDC_DECIMALS;
 
@@ -44,28 +45,41 @@ function getNetwork(): PaymentRequirements["network"] {
   return DEFAULT_NETWORK;
 }
 
+async function generateCdpJwt(method: string, path: string): Promise<string> {
+  const { generateJwt } = await import("@coinbase/cdp-sdk/auth");
+  const apiKeyId = process.env.CDP_API_KEY_ID!;
+  const apiKeySecret = process.env.CDP_API_KEY_SECRET!;
+  return generateJwt({
+    apiKeyId,
+    apiKeySecret,
+    requestMethod: method,
+    requestHost: CDP_FACILITATOR_HOST,
+    requestPath: path,
+  });
+}
+
 function getFacilitatorClient() {
-  const cdpApiKey = process.env.CDP_API_KEY;
+  const cdpApiKeyId = process.env.CDP_API_KEY_ID;
   const facilitatorUrl =
     process.env.FACILITATOR_URL ??
-    (cdpApiKey ? CDP_FACILITATOR_URL : DEFAULT_FACILITATOR_URL);
+    (cdpApiKeyId ? CDP_FACILITATOR_URL : DEFAULT_FACILITATOR_URL);
   const facilitatorResource = facilitatorUrl as `${string}://${string}`;
 
   return useFacilitator(
-    cdpApiKey
+    cdpApiKeyId
       ? {
           url: facilitatorResource,
-          createAuthHeaders: async () => ({
-            verify: {
-              Authorization: `Bearer ${cdpApiKey}`,
-            },
-            settle: {
-              Authorization: `Bearer ${cdpApiKey}`,
-            },
-            supported: {
-              Authorization: `Bearer ${cdpApiKey}`,
-            },
-          }),
+          createAuthHeaders: async () => {
+            const [verifyJwt, settleJwt] = await Promise.all([
+              generateCdpJwt("POST", "/platform/v2/x402/verify"),
+              generateCdpJwt("POST", "/platform/v2/x402/settle"),
+            ]);
+            return {
+              verify: { Authorization: `Bearer ${verifyJwt}` },
+              settle: { Authorization: `Bearer ${settleJwt}` },
+              supported: { Authorization: `Bearer ${verifyJwt}` },
+            };
+          },
         }
       : {
           url: facilitatorResource,
