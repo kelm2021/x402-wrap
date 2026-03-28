@@ -58,33 +58,62 @@ async function generateCdpJwt(method: string, path: string): Promise<string> {
   });
 }
 
+/**
+ * CDP facilitator expects a slightly different body than the x402 library sends:
+ *   - top-level x402Version field
+ *   - paymentPayload.accepted field
+ * This adapter wraps the raw fetch to match CDP's schema.
+ */
+async function cdpVerify(
+  payload: ReturnType<typeof decodePayment>,
+  requirements: PaymentRequirements,
+): Promise<VerifyResponse> {
+  const jwt = await generateCdpJwt("POST", "/platform/v2/x402/verify");
+  const res = await fetch(`${CDP_FACILITATOR_URL}/verify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${jwt}` },
+    body: JSON.stringify({
+      x402Version: payload.x402Version ?? X402_VERSION,
+      paymentPayload: { ...payload, accepted: false },
+      paymentRequirements: requirements,
+    }),
+  });
+  const data = (await res.json()) as VerifyResponse;
+  if (res.status !== 200 && !("isValid" in data)) {
+    throw new VerifyError(res.status, data as VerifyResponse);
+  }
+  return data;
+}
+
+async function cdpSettle(
+  payload: ReturnType<typeof decodePayment>,
+  requirements: PaymentRequirements,
+): Promise<VerifyResponse> {
+  const jwt = await generateCdpJwt("POST", "/platform/v2/x402/settle");
+  const res = await fetch(`${CDP_FACILITATOR_URL}/settle`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${jwt}` },
+    body: JSON.stringify({
+      x402Version: payload.x402Version ?? X402_VERSION,
+      paymentPayload: { ...payload, accepted: true },
+      paymentRequirements: requirements,
+    }),
+  });
+  const data = (await res.json()) as VerifyResponse;
+  if (res.status !== 200 && !("isValid" in data)) {
+    throw new VerifyError(res.status, data as VerifyResponse);
+  }
+  return data;
+}
+
 function getFacilitatorClient() {
   const cdpApiKeyId = process.env.CDP_API_KEY_ID;
-  const facilitatorUrl =
-    process.env.FACILITATOR_URL ??
-    (cdpApiKeyId ? CDP_FACILITATOR_URL : DEFAULT_FACILITATOR_URL);
-  const facilitatorResource = facilitatorUrl as `${string}://${string}`;
-
-  return useFacilitator(
-    cdpApiKeyId
-      ? {
-          url: facilitatorResource,
-          createAuthHeaders: async () => {
-            const [verifyJwt, settleJwt] = await Promise.all([
-              generateCdpJwt("POST", "/platform/v2/x402/verify"),
-              generateCdpJwt("POST", "/platform/v2/x402/settle"),
-            ]);
-            return {
-              verify: { Authorization: `Bearer ${verifyJwt}` },
-              settle: { Authorization: `Bearer ${settleJwt}` },
-              supported: { Authorization: `Bearer ${verifyJwt}` },
-            };
-          },
-        }
-      : {
-          url: facilitatorResource,
-        },
-  );
+  // If CDP credentials set, use custom adapter; otherwise fall back to x402.org
+  if (cdpApiKeyId) {
+    return { verify: cdpVerify, settle: cdpSettle };
+  }
+  const facilitatorUrl = process.env.FACILITATOR_URL ?? DEFAULT_FACILITATOR_URL;
+  return useFacilitator({ url: facilitatorUrl as `${string}://${string}` });
 }
 
 function usdToAtomicUnits(price: string): string {
