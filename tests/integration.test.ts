@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 
 const redisData = new Map<string, string>();
 const verifyPaymentHeaderMock = vi.fn();
+const settlePaymentHeaderMock = vi.fn().mockResolvedValue({ isValid: true });
 
 // Mock the redis module directly so app and tests share the same store
 vi.mock("../src/lib/redis.js", async () => {
@@ -48,6 +49,7 @@ describe("integration", () => {
   let decryptHeaders: typeof import("../src/lib/crypto.js").decryptHeaders;
   let x402Internals: typeof import("../src/middleware/x402.js").x402Internals;
   let actualVerifyPaymentHeader: typeof import("../src/middleware/x402.js").verifyPaymentHeader;
+  let actualSettlePaymentHeader: typeof import("../src/middleware/x402.js").settlePaymentHeader;
   let appServer: { close: (cb?: () => void) => void; address?: () => unknown } | undefined;
   let upstreamServer: ReturnType<typeof createServer>;
   let baseUrl: string;
@@ -61,7 +63,7 @@ describe("integration", () => {
 
     ({ createApp } = await import("../src/index.js"));
     ({ encryptHeaders, decryptHeaders } = await import("../src/lib/crypto.js"));
-    ({ x402Internals, verifyPaymentHeader: actualVerifyPaymentHeader } = await import(
+    ({ x402Internals, verifyPaymentHeader: actualVerifyPaymentHeader, settlePaymentHeader: actualSettlePaymentHeader } = await import(
       "../src/middleware/x402.js"
     ));
   });
@@ -69,7 +71,10 @@ describe("integration", () => {
   beforeEach(async () => {
     redisData.clear();
     verifyPaymentHeaderMock.mockReset();
+    settlePaymentHeaderMock.mockReset();
+    settlePaymentHeaderMock.mockResolvedValue({ isValid: true });
     x402Internals.verifyPaymentHeader = verifyPaymentHeaderMock;
+    x402Internals.settlePaymentHeader = settlePaymentHeaderMock;
     upstreamRequests = [];
 
     upstreamServer = createServer((req, res) => {
@@ -131,6 +136,7 @@ describe("integration", () => {
 
   afterAll(() => {
     x402Internals.verifyPaymentHeader = actualVerifyPaymentHeader;
+    x402Internals.settlePaymentHeader = actualSettlePaymentHeader;
     vi.restoreAllMocks();
   });
 

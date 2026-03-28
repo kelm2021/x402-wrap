@@ -194,16 +194,26 @@ export async function verifyPaymentHeader(
   paymentRequirements: PaymentRequirements,
 ): Promise<VerifyResponse> {
   const paymentPayload = decodePayment(paymentHeader);
-  console.log("[x402] paymentRequirements:", JSON.stringify(paymentRequirements));
-  console.log("[x402] FACILITATOR_URL:", process.env.FACILITATOR_URL ?? "https://x402.org/facilitator");
   const facilitator = getFacilitatorClient();
   const result = await facilitator.verify(paymentPayload, paymentRequirements);
   console.log("[x402] verify result:", JSON.stringify(result));
   return result;
 }
 
+export async function settlePaymentHeader(
+  paymentHeader: string,
+  paymentRequirements: PaymentRequirements,
+): Promise<VerifyResponse> {
+  const paymentPayload = decodePayment(paymentHeader);
+  const facilitator = getFacilitatorClient();
+  const result = await facilitator.settle(paymentPayload, paymentRequirements);
+  console.log("[x402] settle result:", JSON.stringify(result));
+  return result;
+}
+
 export const x402Internals = {
   verifyPaymentHeader,
+  settlePaymentHeader,
 };
 
 export function x402Middleware(price: string, walletAddress: string): MiddlewareHandler {
@@ -244,5 +254,13 @@ export function x402Middleware(price: string, walletAddress: string): Middleware
     }
 
     await next();
+
+    // Settle after successful request — submits the on-chain EIP-3009 transfer
+    try {
+      await x402Internals.settlePaymentHeader(paymentHeader, paymentRequirements);
+    } catch (err) {
+      // Log but don't fail the response — request already processed
+      console.error("[x402] Settle failed:", err);
+    }
   };
 }
