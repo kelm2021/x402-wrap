@@ -1,6 +1,6 @@
 import type { MiddlewareHandler } from "hono";
 import { decodePayment } from "x402/schemes";
-import type { PaymentRequirements, VerifyResponse } from "x402/types";
+import type { PaymentRequirements, VerifyResponse, SettleResponse } from "x402/types";
 import { VerifyError } from "x402/types";
 import { useFacilitator } from "x402/verify";
 
@@ -88,7 +88,7 @@ async function cdpVerify(
 async function cdpSettle(
   payload: ReturnType<typeof decodePayment>,
   requirements: PaymentRequirements,
-): Promise<VerifyResponse> {
+): Promise<SettleResponse> {
   const jwt = await generateCdpJwt("POST", "/platform/v2/x402/settle");
   const res = await fetch(`${CDP_FACILITATOR_URL}/settle`, {
     method: "POST",
@@ -99,10 +99,7 @@ async function cdpSettle(
       paymentRequirements: requirements,
     }),
   });
-  const data = (await res.json()) as VerifyResponse;
-  if (res.status !== 200 && !("isValid" in data)) {
-    throw new VerifyError(res.status, data as VerifyResponse);
-  }
+  const data = (await res.json()) as SettleResponse;
   return data;
 }
 
@@ -203,7 +200,7 @@ export async function verifyPaymentHeader(
 export async function settlePaymentHeader(
   paymentHeader: string,
   paymentRequirements: PaymentRequirements,
-): Promise<VerifyResponse> {
+): Promise<SettleResponse> {
   const paymentPayload = decodePayment(paymentHeader);
   const facilitator = getFacilitatorClient();
   const result = await facilitator.settle(paymentPayload, paymentRequirements);

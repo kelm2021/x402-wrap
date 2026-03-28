@@ -49,7 +49,7 @@ describe("integration", () => {
   let decryptHeaders: typeof import("../src/lib/crypto.js").decryptHeaders;
   let x402Internals: typeof import("../src/middleware/x402.js").x402Internals;
   let actualVerifyPaymentHeader: typeof import("../src/middleware/x402.js").verifyPaymentHeader;
-  let actualSettlePaymentHeader: typeof import("../src/middleware/x402.js").settlePaymentHeader;
+  let actualSettlePaymentHeader: typeof import("../src/middleware/x402.js").settlePaymentHeader; // eslint-disable-line @typescript-eslint/no-unused-vars
   let appServer: { close: (cb?: () => void) => void; address?: () => unknown } | undefined;
   let upstreamServer: ReturnType<typeof createServer>;
   let baseUrl: string;
