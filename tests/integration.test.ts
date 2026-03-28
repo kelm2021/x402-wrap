@@ -155,9 +155,14 @@ describe("integration", () => {
   });
 
   it("POST /register with valid body returns endpointId and proxyUrl", async () => {
+    verifyPaymentHeaderMock.mockResolvedValue({ isValid: true });
+
     const response = await fetch(`${baseUrl}/register`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        "X-PAYMENT": JSON.stringify({ x402Version: 1 }),
+      },
       body: JSON.stringify({
         originUrl: upstreamUrl,
         price: "0.01",
@@ -173,10 +178,26 @@ describe("integration", () => {
     expect(redisData.get(`endpoint:${json.endpointId}`)).toBeTruthy();
   });
 
-  it("POST /register missing required fields returns 400", async () => {
+  it("POST /register without payment returns 402", async () => {
     const response = await fetch(`${baseUrl}/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
+      body: JSON.stringify({ originUrl: upstreamUrl }),
+    });
+
+    expect(response.status).toBe(402);
+    expect(await response.json()).toMatchObject({ x402Version: 1 });
+  });
+
+  it("POST /register with payment but missing required fields returns 400", async () => {
+    verifyPaymentHeaderMock.mockResolvedValue({ isValid: true });
+
+    const response = await fetch(`${baseUrl}/register`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-PAYMENT": JSON.stringify({ x402Version: 1 }),
+      },
       body: JSON.stringify({ originUrl: upstreamUrl }),
     });
 
