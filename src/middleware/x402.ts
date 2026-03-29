@@ -137,8 +137,12 @@ function buildPaymentRequirements(
   resource: string,
 ): PaymentRequirements {
   const network = getNetwork();
-  // Use contract address as payTo when contract is configured (on-chain split)
-  const payTo = (process.env.CONTRACT_ADDRESS || walletAddress) as `0x${string}`;
+  // Use contract address as payTo for proxy payments (on-chain split).
+  // If walletAddress is already the platform wallet (registration), use it directly.
+  const contractAddress = process.env.CONTRACT_ADDRESS;
+  const platformWallet = (process.env.PLATFORM_WALLET ?? "").toLowerCase();
+  const useContract = contractAddress && walletAddress.toLowerCase() !== platformWallet;
+  const payTo = (useContract ? contractAddress : walletAddress) as `0x${string}`;
 
   return {
     scheme: "exact",
@@ -233,11 +237,11 @@ export const x402Internals = {
   settlePaymentHeader,
 };
 
-export function x402Middleware(price: string, walletAddress: string, endpointId?: string): MiddlewareHandler {
+export function x402Middleware(price: string, walletAddress: string, endpointId?: string, opts?: { forcePayTo?: string }): MiddlewareHandler {
   return async (c, next) => {
     const paymentRequirements = buildPaymentRequirements(
       price,
-      walletAddress,
+      opts?.forcePayTo ?? walletAddress,
       (process.env.BASE_URL ?? "") + new URL(c.req.url).pathname,
     );
     const paymentHeader = c.req.header("x-payment");
