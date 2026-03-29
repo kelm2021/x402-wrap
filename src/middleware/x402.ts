@@ -138,11 +138,11 @@ function buildPaymentRequirements(
 ): PaymentRequirements {
   const network = getNetwork();
   // Use contract address as payTo for proxy payments (on-chain split).
-  // If walletAddress is already the platform wallet (registration), use it directly.
+  // walletAddress may already be forcePayTo (registration → RegistrationForwarder) — use as-is.
   const contractAddress = process.env.CONTRACT_ADDRESS;
-  const platformWallet = (process.env.PLATFORM_WALLET ?? "").toLowerCase();
-  const useContract = contractAddress && walletAddress.toLowerCase() !== platformWallet;
-  const payTo = (useContract ? contractAddress : walletAddress) as `0x${string}`;
+  const registrationForwarder = process.env.REGISTRATION_FORWARDER_ADDRESS ?? "";
+  const isForced = walletAddress.toLowerCase() === registrationForwarder.toLowerCase();
+  const payTo = (isForced ? walletAddress : (contractAddress || walletAddress)) as `0x${string}`;
 
   return {
     scheme: "exact",
