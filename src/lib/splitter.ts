@@ -14,6 +14,10 @@ const ABI = parseAbi([
   "function settle(bytes32 endpointId, address from, uint256 value, uint256 validAfter, uint256 validBefore, bytes32 nonce, bytes calldata signature) external",
 ]);
 
+const FORWARDER_ABI = parseAbi([
+  "function forward() external",
+]);
+
 function getClients() {
   const account = privateKeyToAccount(BACKEND_SIGNER_PRIVATE_KEY);
   const publicClient = createPublicClient({ chain: base, transport: http() });
@@ -73,5 +77,20 @@ export async function settleOnChain(
   });
   await publicClient.waitForTransactionReceipt({ hash });
   console.log(`[splitter] settled payment for ${endpointId}: ${hash}`);
+  return hash;
+}
+
+export async function forwardRegistrationFee(): Promise<string> {
+  const forwarderAddress = (process.env.REGISTRATION_FORWARDER_ADDRESS ?? "") as `0x${string}`;
+  if (!forwarderAddress) throw new Error("REGISTRATION_FORWARDER_ADDRESS not set");
+  const { walletClient, publicClient } = getClients();
+  const hash = await walletClient.writeContract({
+    address: forwarderAddress,
+    abi: FORWARDER_ABI,
+    functionName: "forward",
+    args: [],
+  });
+  await publicClient.waitForTransactionReceipt({ hash });
+  console.log(`[splitter] forwarded registration fee: ${hash}`);
   return hash;
 }
