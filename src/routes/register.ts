@@ -24,7 +24,11 @@ function hasStringRecord(value: unknown): value is Record<string, string> {
 
 export const registerRoute = new Hono();
 
-registerRoute.post("/", x402Middleware(REGISTRATION_FEE, PLATFORM_WALLET, undefined, { forcePayTo: PLATFORM_WALLET }), async (c) => {
+const registrationMiddleware = parseFloat(REGISTRATION_FEE) > 0
+  ? x402Middleware(REGISTRATION_FEE, PLATFORM_WALLET, undefined, { forcePayTo: PLATFORM_WALLET })
+  : (_c: unknown, next: () => Promise<void>) => next();
+
+registerRoute.post("/", registrationMiddleware, async (c) => {
   const body = (await c.req.json().catch(() => null)) as RegisterPayload | null;
 
   if (!body?.originUrl || !body.price || !body.walletAddress) {
