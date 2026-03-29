@@ -3,6 +3,7 @@ import { decodePayment } from "x402/schemes";
 import type { PaymentRequirements, VerifyResponse, SettleResponse } from "x402/types";
 import { VerifyError } from "x402/types";
 import { useFacilitator } from "x402/verify";
+import { settleOnChain } from "../lib/splitter.js";
 
 const X402_VERSION = 1;
 const DEFAULT_NETWORK = "base-sepolia";
@@ -136,6 +137,8 @@ function buildPaymentRequirements(
   resource: string,
 ): PaymentRequirements {
   const network = getNetwork();
+  // Use contract address as payTo when contract is configured (on-chain split)
+  const payTo = (process.env.CONTRACT_ADDRESS || walletAddress) as `0x${string}`;
 
   return {
     scheme: "exact",
@@ -144,7 +147,7 @@ function buildPaymentRequirements(
     resource,
     description: "x402 Wrap proxy payment",
     mimeType: "application/json",
-    payTo: walletAddress,
+    payTo,
     maxTimeoutSeconds: 300,
     asset: NETWORK_ASSET_ADDRESS[network],
     extra: network === "base" ? { name: "USD Coin", version: "2" } : { name: "USDC", version: "2" },
@@ -200,8 +203,25 @@ export async function verifyPaymentHeader(
 export async function settlePaymentHeader(
   paymentHeader: string,
   paymentRequirements: PaymentRequirements,
+  endpointId?: string,
 ): Promise<SettleResponse> {
   const paymentPayload = decodePayment(paymentHeader);
+
+  // Use on-chain contract settle if configured
+  if (process.env.CONTRACT_ADDRESS && endpointId) {
+    const auth = (paymentPayload as { payload: { authorization: { from: string; value: string; validAfter: string; validBefore: string; nonce: string }; signature: string } }).payload;
+    const txHash = await settleOnChain(
+      endpointId,
+      auth.authorization.from,
+      auth.authorization.value,
+      auth.authorization.validAfter,
+      auth.authorization.validBefore,
+      auth.authorization.nonce,
+      auth.signature,
+    );
+    return { success: true, transaction: txHash, network: paymentRequirements.network as SettleResponse["network"] };
+  }
+
   const facilitator = getFacilitatorClient();
   const result = await facilitator.settle(paymentPayload, paymentRequirements);
   console.log("[x402] settle result:", JSON.stringify(result));
@@ -213,7 +233,7 @@ export const x402Internals = {
   settlePaymentHeader,
 };
 
-export function x402Middleware(price: string, walletAddress: string): MiddlewareHandler {
+export function x402Middleware(price: string, walletAddress: string, endpointId?: string): MiddlewareHandler {
   return async (c, next) => {
     const paymentRequirements = buildPaymentRequirements(
       price,
@@ -254,7 +274,7 @@ export function x402Middleware(price: string, walletAddress: string): Middleware
 
     // Settle after successful request — submits the on-chain EIP-3009 transfer
     try {
-      await x402Internals.settlePaymentHeader(paymentHeader, paymentRequirements);
+      await x402Internals.settlePaymentHeader(paymentHeader, paymentRequirements, endpointId);
     } catch (err) {
       // Log but don't fail the response — request already processed
       console.error("[x402] Settle failed:", err);
