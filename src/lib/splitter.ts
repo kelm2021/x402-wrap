@@ -2,9 +2,9 @@
  * WrapSplitter contract integration.
  * Calls registerEndpoint and settle on the deployed WrapSplitter contract.
  */
-import { createWalletClient, createPublicClient, http, encodeFunctionData, parseAbi } from "viem";
+import { createWalletClient, createPublicClient, http, parseAbi } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { base } from "viem/chains";
+import { base, baseSepolia } from "viem/chains";
 
 const CONTRACT_ADDRESS = (process.env.CONTRACT_ADDRESS ?? "") as `0x${string}`;
 const BACKEND_SIGNER_PRIVATE_KEY = (process.env.BACKEND_SIGNER_PRIVATE_KEY ?? "") as `0x${string}`;
@@ -19,9 +19,12 @@ const FORWARDER_ABI = parseAbi([
 ]);
 
 function getClients() {
+  const network = (process.env.NETWORK ?? "base").toLowerCase();
+  const chain = network === "base-sepolia" ? baseSepolia : base;
+  const rpcUrl = process.env.RPC_URL;
   const account = privateKeyToAccount(BACKEND_SIGNER_PRIVATE_KEY);
-  const publicClient = createPublicClient({ chain: base, transport: http() });
-  const walletClient = createWalletClient({ account, chain: base, transport: http() });
+  const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
+  const walletClient = createWalletClient({ account, chain, transport: http(rpcUrl) });
   return { account, publicClient, walletClient };
 }
 

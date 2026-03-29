@@ -49,11 +49,14 @@ registerRoute.post("/", registrationMiddleware, async (c) => {
     encryptedHeaders,
   });
 
-  // Register endpoint on-chain (fire-and-forget, don't block response)
+  // Register endpoint on-chain before returning success so payTo/settlement routing stays consistent.
   if (process.env.CONTRACT_ADDRESS && process.env.BACKEND_SIGNER_PRIVATE_KEY) {
-    void registerEndpointOnChain(endpointId, body.walletAddress, DEFAULT_FEE_BPS).catch((err) => {
+    try {
+      await registerEndpointOnChain(endpointId, body.walletAddress, DEFAULT_FEE_BPS);
+    } catch (err) {
       console.error("[splitter] registerEndpoint on-chain failed:", err);
-    });
+      return c.json({ error: "Failed to register endpoint on-chain" }, 502);
+    }
   }
 
   const baseUrl = getBaseUrl();
