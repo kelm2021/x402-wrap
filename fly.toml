@@ -7,7 +7,7 @@ primary_region = "iad"
   PORT = "3402"
   NODE_ENV = "production"
   NETWORK = "base"
-  REDIS_URL = "rediss://default:gQAAAAAAAVNkAAIncDI3Y2E3NTdmNTQ0M2Q0NDcwYjJkZjIyNzhjNDgwNzFjNnAyODY4ODQ@suited-kite-86884.upstash.io:6380"
+  # REDIS_URL is set via Fly secrets
   BASE_URL = "https://wrap-api.aurelianflo.com"
 
 [http_service]
