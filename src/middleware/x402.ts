@@ -237,7 +237,7 @@ export const x402Internals = {
   settlePaymentHeader,
 };
 
-export function x402Middleware(price: string, walletAddress: string, endpointId?: string, opts?: { forcePayTo?: string }): MiddlewareHandler {
+export function x402Middleware(price: string, walletAddress: string, endpointId?: string, opts?: { forcePayTo?: string; skipSettle?: boolean }): MiddlewareHandler {
   return async (c, next) => {
     const paymentRequirements = buildPaymentRequirements(
       price,
@@ -277,11 +277,14 @@ export function x402Middleware(price: string, walletAddress: string, endpointId?
     await next();
 
     // Settle after successful request — submits the on-chain EIP-3009 transfer
-    try {
-      await x402Internals.settlePaymentHeader(paymentHeader, paymentRequirements, endpointId);
-    } catch (err) {
-      // Log but don't fail the response — request already processed
-      console.error("[x402] Settle failed:", err);
+    // Skip settle for registration (forwarder handles USDC automatically)
+    if (!opts?.skipSettle) {
+      try {
+        await x402Internals.settlePaymentHeader(paymentHeader, paymentRequirements, endpointId);
+      } catch (err) {
+        // Log but don't fail the response — request already processed
+        console.error("[x402] Settle failed:", err);
+      }
     }
   };
 }
