@@ -135,14 +135,13 @@ function buildPaymentRequirements(
   price: string,
   walletAddress: string,
   resource: string,
+  opts?: { forcePayTo?: string },
 ): PaymentRequirements {
   const network = getNetwork();
   // Use contract address as payTo for proxy payments (on-chain split).
   // walletAddress may already be forcePayTo (registration → RegistrationForwarder) — use as-is.
   const contractAddress = process.env.CONTRACT_ADDRESS;
-  const registrationForwarder = process.env.REGISTRATION_FORWARDER_ADDRESS ?? "";
-  const isForced = walletAddress.toLowerCase() === registrationForwarder.toLowerCase();
-  const payTo = (isForced ? walletAddress : (contractAddress || walletAddress)) as `0x${string}`;
+  const payTo = (opts?.forcePayTo || contractAddress || walletAddress) as `0x${string}`;
 
   return {
     scheme: "exact",
@@ -241,8 +240,9 @@ export function x402Middleware(price: string, walletAddress: string, endpointId?
   return async (c, next) => {
     const paymentRequirements = buildPaymentRequirements(
       price,
-      opts?.forcePayTo ?? walletAddress,
+      walletAddress,
       (process.env.BASE_URL ?? "") + new URL(c.req.url).pathname,
+      opts,
     );
     const paymentHeader = c.req.header("x-payment");
 
