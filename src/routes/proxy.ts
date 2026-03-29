@@ -32,7 +32,7 @@ proxyRoute.all("/:endpointId/*", async (c) => {
   let statusCode = 200;
 
   try {
-    const middlewareResponse = await x402Middleware(config.price, config.walletAddress, endpointId)(
+    const middlewareResponse = await x402Middleware(config.price, config.walletAddress ?? "0x0000000000000000000000000000000000000000", endpointId)(
       c,
       async () => {
         upstreamResponse = await forwardRequest(c, config);
