@@ -6,7 +6,7 @@ import { submitToBazaar } from "../lib/bazaar.js";
 import { getBaseUrl } from "../lib/env.js";
 import { saveEndpoint } from "../lib/redis.js";
 import { x402Middleware } from "../middleware/x402.js";
-import { registerEndpointOnChain, forwardRegistrationFee } from "../lib/splitter.js";
+import { registerEndpointOnChain } from "../lib/splitter.js";
 import type { RegisterPayload } from "../lib/types.js";
 
 // Platform wallet — registration fee goes here
@@ -44,13 +44,6 @@ registerRoute.post("/", x402Middleware(REGISTRATION_FEE, PLATFORM_WALLET, undefi
     pathPattern: body.pathPattern ?? "*",
     encryptedHeaders,
   });
-
-  // Forward registration fee to platform wallet (fire-and-forget)
-  if (process.env.REGISTRATION_FORWARDER_ADDRESS && process.env.BACKEND_SIGNER_PRIVATE_KEY) {
-    void forwardRegistrationFee().catch((err) => {
-      console.error("[splitter] forwardRegistrationFee failed:", err);
-    });
-  }
 
   // Register endpoint on-chain (fire-and-forget, don't block response)
   if (process.env.CONTRACT_ADDRESS && process.env.BACKEND_SIGNER_PRIVATE_KEY) {
