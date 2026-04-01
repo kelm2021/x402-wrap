@@ -1,13 +1,15 @@
 import type { MiddlewareHandler } from "hono";
 import { decodePayment } from "x402/schemes";
-import type { PaymentRequirements, VerifyResponse } from "x402/types";
+import type { PaymentRequirements, VerifyResponse, SettleResponse } from "x402/types";
 import { VerifyError } from "x402/types";
 import { useFacilitator } from "x402/verify";
+import { settleOnChain } from "../lib/splitter.js";
 
 const X402_VERSION = 1;
 const DEFAULT_NETWORK = "base-sepolia";
 const DEFAULT_FACILITATOR_URL = "https://x402.org/facilitator";
 const CDP_FACILITATOR_URL = "https://api.cdp.coinbase.com/platform/v2/x402";
+const CDP_FACILITATOR_HOST = "api.cdp.coinbase.com";
 const USDC_DECIMALS = 6n;
 const USDC_MULTIPLIER = 10n ** USDC_DECIMALS;
 
@@ -44,33 +46,72 @@ function getNetwork(): PaymentRequirements["network"] {
   return DEFAULT_NETWORK;
 }
 
-function getFacilitatorClient() {
-  const cdpApiKey = process.env.CDP_API_KEY;
-  const facilitatorUrl =
-    process.env.FACILITATOR_URL ??
-    (cdpApiKey ? CDP_FACILITATOR_URL : DEFAULT_FACILITATOR_URL);
-  const facilitatorResource = facilitatorUrl as `${string}://${string}`;
+async function generateCdpJwt(method: string, path: string): Promise<string> {
+  const { generateJwt } = await import("@coinbase/cdp-sdk/auth");
+  const apiKeyId = process.env.CDP_API_KEY_ID!;
+  const apiKeySecret = process.env.CDP_API_KEY_SECRET!;
+  return generateJwt({
+    apiKeyId,
+    apiKeySecret,
+    requestMethod: method,
+    requestHost: CDP_FACILITATOR_HOST,
+    requestPath: path,
+  });
+}
 
-  return useFacilitator(
-    cdpApiKey
-      ? {
-          url: facilitatorResource,
-          createAuthHeaders: async () => ({
-            verify: {
-              Authorization: `Bearer ${cdpApiKey}`,
-            },
-            settle: {
-              Authorization: `Bearer ${cdpApiKey}`,
-            },
-            supported: {
-              Authorization: `Bearer ${cdpApiKey}`,
-            },
-          }),
-        }
-      : {
-          url: facilitatorResource,
-        },
-  );
+/**
+ * CDP facilitator expects a slightly different body than the x402 library sends:
+ *   - top-level x402Version field
+ *   - paymentPayload.accepted field
+ * This adapter wraps the raw fetch to match CDP's schema.
+ */
+async function cdpVerify(
+  payload: ReturnType<typeof decodePayment>,
+  requirements: PaymentRequirements,
+): Promise<VerifyResponse> {
+  const jwt = await generateCdpJwt("POST", "/platform/v2/x402/verify");
+  const res = await fetch(`${CDP_FACILITATOR_URL}/verify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${jwt}` },
+    body: JSON.stringify({
+      x402Version: payload.x402Version ?? X402_VERSION,
+      paymentPayload: { ...payload, accepted: false },
+      paymentRequirements: requirements,
+    }),
+  });
+  const data = (await res.json()) as VerifyResponse;
+  if (res.status !== 200 && !("isValid" in data)) {
+    throw new VerifyError(res.status, data as VerifyResponse);
+  }
+  return data;
+}
+
+async function cdpSettle(
+  payload: ReturnType<typeof decodePayment>,
+  requirements: PaymentRequirements,
+): Promise<SettleResponse> {
+  const jwt = await generateCdpJwt("POST", "/platform/v2/x402/settle");
+  const res = await fetch(`${CDP_FACILITATOR_URL}/settle`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${jwt}` },
+    body: JSON.stringify({
+      x402Version: payload.x402Version ?? X402_VERSION,
+      paymentPayload: { ...payload, accepted: true },
+      paymentRequirements: requirements,
+    }),
+  });
+  const data = (await res.json()) as SettleResponse;
+  return data;
+}
+
+function getFacilitatorClient() {
+  const cdpApiKeyId = process.env.CDP_API_KEY_ID;
+  // If CDP credentials set, use custom adapter; otherwise fall back to x402.org
+  if (cdpApiKeyId) {
+    return { verify: cdpVerify, settle: cdpSettle };
+  }
+  const facilitatorUrl = process.env.FACILITATOR_URL ?? DEFAULT_FACILITATOR_URL;
+  return useFacilitator({ url: facilitatorUrl as `${string}://${string}` });
 }
 
 function usdToAtomicUnits(price: string): string {
@@ -94,8 +135,13 @@ function buildPaymentRequirements(
   price: string,
   walletAddress: string,
   resource: string,
+  opts?: { forcePayTo?: string },
 ): PaymentRequirements {
   const network = getNetwork();
+  // Use contract address as payTo for proxy payments (on-chain split).
+  // walletAddress may already be forcePayTo (registration → RegistrationForwarder) — use as-is.
+  const contractAddress = process.env.CONTRACT_ADDRESS;
+  const payTo = (opts?.forcePayTo || contractAddress || walletAddress) as `0x${string}`;
 
   return {
     scheme: "exact",
@@ -104,7 +150,7 @@ function buildPaymentRequirements(
     resource,
     description: "x402 Wrap proxy payment",
     mimeType: "application/json",
-    payTo: walletAddress,
+    payTo,
     maxTimeoutSeconds: 300,
     asset: NETWORK_ASSET_ADDRESS[network],
     extra: network === "base" ? { name: "USD Coin", version: "2" } : { name: "USDC", version: "2" },
@@ -151,24 +197,52 @@ export async function verifyPaymentHeader(
   paymentRequirements: PaymentRequirements,
 ): Promise<VerifyResponse> {
   const paymentPayload = decodePayment(paymentHeader);
-  console.log("[x402] paymentRequirements:", JSON.stringify(paymentRequirements));
-  console.log("[x402] FACILITATOR_URL:", process.env.FACILITATOR_URL ?? "https://x402.org/facilitator");
   const facilitator = getFacilitatorClient();
   const result = await facilitator.verify(paymentPayload, paymentRequirements);
   console.log("[x402] verify result:", JSON.stringify(result));
   return result;
 }
 
+export async function settlePaymentHeader(
+  paymentHeader: string,
+  paymentRequirements: PaymentRequirements,
+  endpointId?: string,
+): Promise<SettleResponse> {
+  const paymentPayload = decodePayment(paymentHeader);
+
+  // Use on-chain contract settle if configured
+  if (process.env.CONTRACT_ADDRESS && endpointId) {
+    const auth = (paymentPayload as { payload: { authorization: { from: string; value: string; validAfter: string; validBefore: string; nonce: string }; signature: string } }).payload;
+    const txHash = await settleOnChain(
+      endpointId,
+      auth.authorization.from,
+      auth.authorization.value,
+      auth.authorization.validAfter,
+      auth.authorization.validBefore,
+      auth.authorization.nonce,
+      auth.signature,
+    );
+    return { success: true, transaction: txHash, network: paymentRequirements.network as SettleResponse["network"] };
+  }
+
+  const facilitator = getFacilitatorClient();
+  const result = await facilitator.settle(paymentPayload, paymentRequirements);
+  console.log("[x402] settle result:", JSON.stringify(result));
+  return result;
+}
+
 export const x402Internals = {
   verifyPaymentHeader,
+  settlePaymentHeader,
 };
 
-export function x402Middleware(price: string, walletAddress: string): MiddlewareHandler {
+export function x402Middleware(price: string, walletAddress: string, endpointId?: string, opts?: { forcePayTo?: string; skipSettle?: boolean }): MiddlewareHandler {
   return async (c, next) => {
     const paymentRequirements = buildPaymentRequirements(
       price,
       walletAddress,
       (process.env.BASE_URL ?? "") + new URL(c.req.url).pathname,
+      opts,
     );
     const paymentHeader = c.req.header("x-payment");
 
@@ -201,5 +275,16 @@ export function x402Middleware(price: string, walletAddress: string): Middleware
     }
 
     await next();
+
+    // Settle after successful request — submits the on-chain EIP-3009 transfer
+    // Skip settle for registration (forwarder handles USDC automatically)
+    if (!opts?.skipSettle) {
+      try {
+        await x402Internals.settlePaymentHeader(paymentHeader, paymentRequirements, endpointId);
+      } catch (err) {
+        // Log but don't fail the response — request already processed
+        console.error("[x402] Settle failed:", err);
+      }
+    }
   };
 }

@@ -32,6 +32,23 @@ jobs:
       - name: Deploy to Fly.io
         uses: superfly/flyctl-actions/setup-flyctl@master
 
+      - name: Set Fly secrets
+        run: |
+          flyctl secrets set \
+            BASE_URL="https://wrap-api.aurelianflo.com" \
+            CDP_API_KEY_ID="${{ secrets.CDP_API_KEY_ID }}" \
+            CDP_API_KEY_SECRET="${{ secrets.CDP_API_KEY_SECRET }}" \
+            RPC_URL="https://sepolia.base.org" \
+            NETWORK="base-sepolia" \
+            CONTRACT_ADDRESS="${{ secrets.CONTRACT_ADDRESS }}" \
+            BACKEND_SIGNER_PRIVATE_KEY="${{ secrets.BACKEND_SIGNER_PRIVATE_KEY }}" \
+            PLATFORM_WALLET="0x348Df429BD49A7506128c74CE1124A81B4B7dC9d" \
+            REGISTRATION_FEE="0.01" \
+            DEFAULT_FEE_BPS="100" \
+            --app x402-wrap
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
       - run: flyctl deploy --remote-only
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

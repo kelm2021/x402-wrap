@@ -7,6 +7,12 @@ app = 'x402-wrap-5pk7ig'
 primary_region = 'ams'
 
 [build]
+[env]
+  PORT = "3402"
+  NODE_ENV = "production"
+  NETWORK = "base"
+  # REDIS_URL is set via Fly secrets
+  BASE_URL = "https://wrap-api.aurelianflo.com"
 
 [http_service]
   internal_port = 8080

@@ -54,5 +54,13 @@ export async function forwardRequest(c: Context, config: EndpointConfig): Promis
     redirect: "manual",
   } as RequestInit & { duplex?: "half" };
 
-  return fetch(targetUrl, requestInit);
+  const upstream = await fetch(targetUrl, requestInit);
+
+  // Re-wrap in a mutable Response so downstream middleware (e.g. CORS) can set headers
+  const mutableHeaders = new Headers(upstream.headers);
+  return new Response(upstream.body, {
+    status: upstream.status,
+    statusText: upstream.statusText,
+    headers: mutableHeaders,
+  });
 }

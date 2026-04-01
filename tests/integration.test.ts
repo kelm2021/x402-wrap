@@ -4,55 +4,36 @@ import { createServer } from "node:http";
 
 const redisData = new Map<string, string>();
 const verifyPaymentHeaderMock = vi.fn();
+const settlePaymentHeaderMock = vi.fn().mockResolvedValue({ isValid: true });
 
-vi.mock("ioredis", () => {
-  class MockRedis {
-    async get(key: string) {
-      return redisData.get(key) ?? null;
-    }
-
-    async set(key: string, value: string) {
-      redisData.set(key, value);
-      return "OK";
-    }
-
-    async incr(key: string) {
-      const val = parseInt(redisData.get(key) ?? "0", 10) + 1;
-      redisData.set(key, String(val));
-      return val;
-    }
-
-    async expire(_key: string, _ttl: number) {
-      return 1;
-    }
-  }
-
-  return { default: MockRedis };
-});
-
-vi.mock("ioredis-mock", () => {
-  class MockRedis {
-    async get(key: string) {
-      return redisData.get(key) ?? null;
-    }
-
-    async set(key: string, value: string) {
-      redisData.set(key, value);
-      return "OK";
-    }
-
-    async incr(key: string) {
-      const val = parseInt(redisData.get(key) ?? "0", 10) + 1;
-      redisData.set(key, String(val));
-      return val;
-    }
-
-    async expire(_key: string, _ttl: number) {
-      return 1;
-    }
-  }
-
-  return { default: MockRedis };
+// Mock the redis module directly so app and tests share the same store
+vi.mock("../src/lib/redis.js", async () => {
+  return {
+    getClient: async () => ({
+      get: async (key: string) => redisData.get(key) ?? null,
+      set: async (key: string, value: string) => { redisData.set(key, value); return "OK"; },
+      incr: async (key: string) => { const v = parseInt(redisData.get(key) ?? "0", 10) + 1; redisData.set(key, String(v)); return v; },
+      expire: async () => 1,
+      scan: async () => ["0", [...redisData.keys()]],
+      mget: async (...keys: string[]) => keys.map((k) => redisData.get(k) ?? null),
+    }),
+    saveEndpoint: async (endpointId: string, config: unknown) => {
+      redisData.set(`endpoint:${endpointId}`, JSON.stringify(config));
+    },
+    getEndpoint: async (endpointId: string) => {
+      const raw = redisData.get(`endpoint:${endpointId}`);
+      return raw ? JSON.parse(raw) : null;
+    },
+    listAllEndpoints: async () => {
+      const results = [];
+      for (const [key, value] of redisData.entries()) {
+        if (key.startsWith("endpoint:")) {
+          results.push({ endpointId: key.replace("endpoint:", ""), config: JSON.parse(value), createdAt: null });
+        }
+      }
+      return results;
+    },
+  };
 });
 
 vi.mock("x402/types", async () => {
@@ -68,6 +49,7 @@ describe("integration", () => {
   let decryptHeaders: typeof import("../src/lib/crypto.js").decryptHeaders;
   let x402Internals: typeof import("../src/middleware/x402.js").x402Internals;
   let actualVerifyPaymentHeader: typeof import("../src/middleware/x402.js").verifyPaymentHeader;
+  let actualSettlePaymentHeader: typeof import("../src/middleware/x402.js").settlePaymentHeader; // eslint-disable-line @typescript-eslint/no-unused-vars
   let appServer: { close: (cb?: () => void) => void; address?: () => unknown } | undefined;
   let upstreamServer: ReturnType<typeof createServer>;
   let baseUrl: string;
@@ -81,7 +63,7 @@ describe("integration", () => {
 
     ({ createApp } = await import("../src/index.js"));
     ({ encryptHeaders, decryptHeaders } = await import("../src/lib/crypto.js"));
-    ({ x402Internals, verifyPaymentHeader: actualVerifyPaymentHeader } = await import(
+    ({ x402Internals, verifyPaymentHeader: actualVerifyPaymentHeader, settlePaymentHeader: actualSettlePaymentHeader } = await import(
       "../src/middleware/x402.js"
     ));
   });
@@ -89,7 +71,10 @@ describe("integration", () => {
   beforeEach(async () => {
     redisData.clear();
     verifyPaymentHeaderMock.mockReset();
+    settlePaymentHeaderMock.mockReset();
+    settlePaymentHeaderMock.mockResolvedValue({ isValid: true });
     x402Internals.verifyPaymentHeader = verifyPaymentHeaderMock;
+    x402Internals.settlePaymentHeader = settlePaymentHeaderMock;
     upstreamRequests = [];
 
     upstreamServer = createServer((req, res) => {
@@ -151,13 +136,19 @@ describe("integration", () => {
 
   afterAll(() => {
     x402Internals.verifyPaymentHeader = actualVerifyPaymentHeader;
+    x402Internals.settlePaymentHeader = actualSettlePaymentHeader;
     vi.restoreAllMocks();
   });
 
   it("POST /register with valid body returns endpointId and proxyUrl", async () => {
+    verifyPaymentHeaderMock.mockResolvedValue({ isValid: true });
+
     const response = await fetch(`${baseUrl}/register`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        "X-PAYMENT": JSON.stringify({ x402Version: 1 }),
+      },
       body: JSON.stringify({
         originUrl: upstreamUrl,
         price: "0.01",
@@ -173,10 +164,26 @@ describe("integration", () => {
     expect(redisData.get(`endpoint:${json.endpointId}`)).toBeTruthy();
   });
 
-  it("POST /register missing required fields returns 400", async () => {
+  it("POST /register without payment returns 402", async () => {
     const response = await fetch(`${baseUrl}/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
+      body: JSON.stringify({ originUrl: upstreamUrl }),
+    });
+
+    expect(response.status).toBe(402);
+    expect(await response.json()).toMatchObject({ x402Version: 1 });
+  });
+
+  it("POST /register with payment but missing required fields returns 400", async () => {
+    verifyPaymentHeaderMock.mockResolvedValue({ isValid: true });
+
+    const response = await fetch(`${baseUrl}/register`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-PAYMENT": JSON.stringify({ x402Version: 1 }),
+      },
       body: JSON.stringify({ originUrl: upstreamUrl }),
     });
 

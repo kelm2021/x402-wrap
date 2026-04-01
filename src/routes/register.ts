@@ -2,9 +2,17 @@ import { Hono } from "hono";
 import { nanoid } from "nanoid";
 
 import { encryptHeaders } from "../lib/crypto.js";
+import { submitToBazaar } from "../lib/bazaar.js";
 import { getBaseUrl } from "../lib/env.js";
 import { saveEndpoint } from "../lib/redis.js";
+import { x402Middleware } from "../middleware/x402.js";
+import { registerEndpointOnChain } from "../lib/splitter.js";
 import type { RegisterPayload } from "../lib/types.js";
+
+// Platform wallet — registration fee goes here
+const PLATFORM_WALLET = (process.env.PLATFORM_WALLET ?? "0x348Df429BD49A7506128c74CE1124A81B4B7dC9d") as `0x${string}`;
+const REGISTRATION_FEE = process.env.REGISTRATION_FEE ?? "2";
+const DEFAULT_FEE_BPS = parseInt(process.env.DEFAULT_FEE_BPS ?? "100", 10); // 1%
 
 function hasStringRecord(value: unknown): value is Record<string, string> {
   return (
@@ -16,7 +24,11 @@ function hasStringRecord(value: unknown): value is Record<string, string> {
 
 export const registerRoute = new Hono();
 
-registerRoute.post("/", async (c) => {
+const registrationMiddleware = parseFloat(REGISTRATION_FEE) > 0
+  ? x402Middleware(REGISTRATION_FEE, PLATFORM_WALLET, undefined, { forcePayTo: PLATFORM_WALLET })
+  : (_c: unknown, next: () => Promise<void>) => next();
+
+registerRoute.post("/", registrationMiddleware, async (c) => {
   const body = (await c.req.json().catch(() => null)) as RegisterPayload | null;
 
   if (!body?.originUrl || !body.price || !body.walletAddress) {
@@ -37,8 +49,24 @@ registerRoute.post("/", async (c) => {
     encryptedHeaders,
   });
 
+  // Register endpoint on-chain before returning success so payTo/settlement routing stays consistent.
+  if (process.env.CONTRACT_ADDRESS && process.env.BACKEND_SIGNER_PRIVATE_KEY) {
+    try {
+      await registerEndpointOnChain(endpointId, body.walletAddress, DEFAULT_FEE_BPS);
+    } catch (err) {
+      console.error("[splitter] registerEndpoint on-chain failed:", err);
+      return c.json({ error: "Failed to register endpoint on-chain" }, 502);
+    }
+  }
+
+  const baseUrl = getBaseUrl();
+  const proxyUrl = `${baseUrl}/p/${endpointId}/*`;
+  void submitToBazaar(endpointId, proxyUrl, body.price);
+
   return c.json({
     endpointId,
-    proxyUrl: `${getBaseUrl()}/p/${endpointId}/*`,
+    proxyUrl,
+    discoveryUrl: `${baseUrl}/.well-known/x402.json`,
+    bazaarHint: "Endpoint discoverable via x402-wrap discovery catalog",
   });
 });
