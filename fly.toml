@@ -1,8 +1,12 @@
-app = "x402-wrap"
-primary_region = "iad"
+# fly.toml app configuration file generated for x402-wrap-5pk7ig on 2026-03-27T17:26:47Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'x402-wrap-5pk7ig'
+primary_region = 'ams'
 
 [build]
-
 [env]
   PORT = "3402"
   NODE_ENV = "production"
@@ -11,29 +15,15 @@ primary_region = "iad"
   BASE_URL = "https://wrap-api.aurelianflo.com"
 
 [http_service]
-  internal_port = 3402
+  internal_port = 8080
   force_https = true
-  auto_stop_machines = "stop"
+  auto_stop_machines = 'stop'
   auto_start_machines = true
   min_machines_running = 0
-  processes = ["app"]
-
-  [http_service.concurrency]
-    type = "connections"
-    hard_limit = 25
-    soft_limit = 20
+  processes = ['app']
 
 [[vm]]
-  memory = "256mb"
-  cpu_kind = "shared"
+  memory = '1gb'
+  cpu_kind = 'shared'
   cpus = 1
-
-[checks]
-  [checks.health]
-    grace_period = "10s"
-    interval = "30s"
-    method = "GET"
-    path = "/"
-    port = 3402
-    timeout = "5s"
-    type = "http"
+  memory_mb = 256
