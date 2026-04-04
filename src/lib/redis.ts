@@ -1,4 +1,4 @@
-import type { EndpointConfig } from "./types.js";
+import type { EndpointConfig, EndpointRecord, EndpointStatus, EndpointVisibility } from "./types.js";
 
 const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
 const useMock = redisUrl === "mock" || process.env.REDIS_MOCK === "true";
@@ -33,7 +33,7 @@ let _client: Awaited<ReturnType<typeof createClient>> | null = null;
 
 export interface StoredEndpoint {
   endpointId: string;
-  config: EndpointConfig;
+  config: EndpointRecord;
   createdAt: string | null;
 }
 
@@ -43,6 +43,23 @@ export async function getClient() {
 }
 
 export async function saveEndpoint(endpointId: string, config: EndpointConfig): Promise<void> {
+  const existing = await getEndpointRecord(endpointId);
+  const record: EndpointRecord = {
+    ...config,
+    status: existing?.status ?? "active",
+    visibility: existing?.visibility ?? "public",
+    verificationToken: existing?.verificationToken,
+    verificationPath: existing?.verificationPath,
+    verifiedAt: existing?.verifiedAt ?? null,
+    activatedAt: existing?.activatedAt ?? new Date().toISOString(),
+    lastVerificationError: existing?.lastVerificationError ?? null,
+    paymentTxHash: existing?.paymentTxHash ?? null,
+    activationTxHash: existing?.activationTxHash ?? null,
+  };
+  await saveEndpointRecord(endpointId, record);
+}
+
+export async function saveEndpointRecord(endpointId: string, config: EndpointRecord): Promise<void> {
   const client = await getClient();
   // Write to Redis cache
   await client.set(`endpoint:${endpointId}`, JSON.stringify(config));
@@ -55,7 +72,7 @@ export async function saveEndpoint(endpointId: string, config: EndpointConfig): 
   try {
     const { getDb } = await import("./db.js");
     const { endpoints } = await import("./schema.js");
-    const db = getDb();
+    const db = await getDb();
     if (db) {
       await db
         .insert(endpoints)
@@ -66,6 +83,15 @@ export async function saveEndpoint(endpointId: string, config: EndpointConfig): 
           walletAddress: config.walletAddress,
           pathPattern: config.pathPattern,
           encryptedHeaders: config.encryptedHeaders ?? null,
+          status: config.status,
+          visibility: config.visibility,
+          verificationToken: config.verificationToken ?? null,
+          verificationPath: config.verificationPath ?? null,
+          verifiedAt: config.verifiedAt ? new Date(config.verifiedAt) : null,
+          activatedAt: config.activatedAt ? new Date(config.activatedAt) : null,
+          lastVerificationError: config.lastVerificationError ?? null,
+          paymentTxHash: config.paymentTxHash ?? null,
+          activationTxHash: config.activationTxHash ?? null,
         })
         .onConflictDoUpdate({
           target: endpoints.id,
@@ -75,6 +101,15 @@ export async function saveEndpoint(endpointId: string, config: EndpointConfig): 
             walletAddress: config.walletAddress,
             pathPattern: config.pathPattern,
             encryptedHeaders: config.encryptedHeaders ?? null,
+            status: config.status,
+            visibility: config.visibility,
+            verificationToken: config.verificationToken ?? null,
+            verificationPath: config.verificationPath ?? null,
+            verifiedAt: config.verifiedAt ? new Date(config.verifiedAt) : null,
+            activatedAt: config.activatedAt ? new Date(config.activatedAt) : null,
+            lastVerificationError: config.lastVerificationError ?? null,
+            paymentTxHash: config.paymentTxHash ?? null,
+            activationTxHash: config.activationTxHash ?? null,
             updatedAt: new Date(),
           },
         });
@@ -86,12 +121,27 @@ export async function saveEndpoint(endpointId: string, config: EndpointConfig): 
 }
 
 export async function getEndpoint(endpointId: string): Promise<EndpointConfig | null> {
+  const record = await getEndpointRecord(endpointId);
+  if (!record || record.status !== "active") {
+    return null;
+  }
+
+  return {
+    originUrl: record.originUrl,
+    price: record.price,
+    walletAddress: record.walletAddress,
+    pathPattern: record.pathPattern,
+    encryptedHeaders: record.encryptedHeaders,
+  };
+}
+
+export async function getEndpointRecord(endpointId: string): Promise<EndpointRecord | null> {
   const client = await getClient();
 
   // Fast path: Redis cache
   const raw = await client.get(`endpoint:${endpointId}`);
   if (raw) {
-    return JSON.parse(raw) as EndpointConfig;
+    return JSON.parse(raw) as EndpointRecord;
   }
 
   // Cache miss: try Postgres
@@ -99,17 +149,26 @@ export async function getEndpoint(endpointId: string): Promise<EndpointConfig | 
     const { getDb } = await import("./db.js");
     const { endpoints } = await import("./schema.js");
     const { eq } = await import("drizzle-orm");
-    const db = getDb();
+    const db = await getDb();
     if (db) {
       const rows = await db.select().from(endpoints).where(eq(endpoints.id, endpointId)).limit(1);
       if (rows.length > 0) {
         const row = rows[0];
-        const config: EndpointConfig = {
+        const config: EndpointRecord = {
           originUrl: row.originUrl,
           price: row.price,
           walletAddress: row.walletAddress,
           pathPattern: row.pathPattern,
           encryptedHeaders: row.encryptedHeaders as EndpointConfig["encryptedHeaders"],
+          status: row.status as EndpointStatus,
+          visibility: row.visibility as EndpointVisibility,
+          verificationToken: row.verificationToken ?? undefined,
+          verificationPath: row.verificationPath ?? undefined,
+          verifiedAt: row.verifiedAt ? row.verifiedAt.toISOString() : null,
+          activatedAt: row.activatedAt ? row.activatedAt.toISOString() : null,
+          lastVerificationError: row.lastVerificationError ?? null,
+          paymentTxHash: row.paymentTxHash ?? null,
+          activationTxHash: row.activationTxHash ?? null,
         };
         // Repopulate Redis cache
         await client.set(`endpoint:${endpointId}`, JSON.stringify(config));
@@ -130,7 +189,7 @@ export async function listAllEndpoints(): Promise<StoredEndpoint[]> {
   try {
     const { getDb } = await import("./db.js");
     const { endpoints } = await import("./schema.js");
-    const db = getDb();
+    const db = await getDb();
     if (db) {
       const rows = await db.select().from(endpoints);
       return rows.map((row) => ({
@@ -141,6 +200,15 @@ export async function listAllEndpoints(): Promise<StoredEndpoint[]> {
           walletAddress: row.walletAddress,
           pathPattern: row.pathPattern,
           encryptedHeaders: row.encryptedHeaders as EndpointConfig["encryptedHeaders"],
+          status: row.status as EndpointStatus,
+          visibility: row.visibility as EndpointVisibility,
+          verificationToken: row.verificationToken ?? undefined,
+          verificationPath: row.verificationPath ?? undefined,
+          verifiedAt: row.verifiedAt ? row.verifiedAt.toISOString() : null,
+          activatedAt: row.activatedAt ? row.activatedAt.toISOString() : null,
+          lastVerificationError: row.lastVerificationError ?? null,
+          paymentTxHash: row.paymentTxHash ?? null,
+          activationTxHash: row.activationTxHash ?? null,
         },
         createdAt: row.createdAt.toISOString(),
       }));
@@ -176,7 +244,7 @@ export async function listAllEndpoints(): Promise<StoredEndpoint[]> {
     return [
       {
         endpointId: key.replace(/^endpoint:/, ""),
-        config: JSON.parse(raw) as EndpointConfig,
+        config: JSON.parse(raw) as EndpointRecord,
         createdAt: null,
       },
     ];

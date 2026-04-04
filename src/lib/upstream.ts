@@ -1,5 +1,6 @@
 import type { Context } from "hono";
 
+import { assertSafeResolvedOrigin } from "./origin-security.js";
 import { decryptHeaders } from "./crypto.js";
 import type { EndpointConfig } from "./types.js";
 
@@ -29,6 +30,7 @@ function buildTargetUrl(c: Context, originUrl: string): string {
 }
 
 export async function forwardRequest(c: Context, config: EndpointConfig): Promise<Response> {
+  await assertSafeResolvedOrigin(config.originUrl);
   const targetUrl = buildTargetUrl(c, config.originUrl);
   const headers = new Headers();
   const body = c.req.method === "GET" || c.req.method === "HEAD" ? undefined : c.req.raw.body;

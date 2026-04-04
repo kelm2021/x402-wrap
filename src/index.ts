@@ -5,8 +5,9 @@ import { cors } from "hono/cors";
 import { getPort } from "./lib/env.js";
 import { discoveryRoute } from "./routes/discovery.js";
 import { proxyRoute } from "./routes/proxy.js";
-import { registerRoute } from "./routes/register.js";
+import { registerIntentRoute, registerRoute } from "./routes/register.js";
 import { usageRoute } from "./routes/usage.js";
+import { activateRoute, verifyRoute } from "./routes/verify.js";
 
 try {
   const dotenv = await import("dotenv");
@@ -29,6 +30,9 @@ export function createApp() {
   app.get("/", (c) => c.json({ ok: true, service: "x402-wrap" }));
   app.route("/.well-known/x402.json", discoveryRoute);
   app.route("/register", registerRoute);
+  app.route("/register-intent", registerIntentRoute);
+  app.route("/verify", verifyRoute);
+  app.route("/activate", activateRoute);
   app.route("/p", proxyRoute);
   app.route("/usage", usageRoute);
 

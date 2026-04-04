@@ -20,7 +20,16 @@ vi.mock("../src/lib/redis.js", async () => {
     saveEndpoint: async (endpointId: string, config: unknown) => {
       redisData.set(`endpoint:${endpointId}`, JSON.stringify(config));
     },
+    saveEndpointRecord: async (endpointId: string, record: unknown) => {
+      redisData.set(`endpoint:${endpointId}`, JSON.stringify(record));
+    },
     getEndpoint: async (endpointId: string) => {
+      const raw = redisData.get(`endpoint:${endpointId}`);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      return parsed?.status && parsed.status !== "active" ? null : parsed;
+    },
+    getEndpointRecord: async (endpointId: string) => {
       const raw = redisData.get(`endpoint:${endpointId}`);
       return raw ? JSON.parse(raw) : null;
     },
@@ -60,6 +69,7 @@ describe("integration", () => {
     process.env.ENCRYPTION_KEY =
       "0000000000000000000000000000000000000000000000000000000000000000";
     process.env.NETWORK = "base-sepolia";
+    process.env.ALLOW_PRIVATE_ORIGINS = "true";
 
     ({ createApp } = await import("../src/index.js"));
     ({ encryptHeaders, decryptHeaders } = await import("../src/lib/crypto.js"));
@@ -81,6 +91,13 @@ describe("integration", () => {
       const chunks: Buffer[] = [];
       req.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
       req.on("end", () => {
+        if (req.url?.startsWith("/.well-known/x402-wrap-verification/")) {
+          const token = req.url.split("/").pop() ?? "";
+          res.writeHead(200, { "content-type": "text/plain" });
+          res.end(token);
+          return;
+        }
+
         upstreamRequests.push({
           headers: new Headers(
             Object.entries(req.headers)
@@ -141,18 +158,15 @@ describe("integration", () => {
   });
 
   it("POST /register with valid body returns endpointId and proxyUrl", async () => {
-    verifyPaymentHeaderMock.mockResolvedValue({ isValid: true });
-
-    const response = await fetch(`${baseUrl}/register`, {
+    const response = await fetch(`${baseUrl}/register-intent`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "X-PAYMENT": JSON.stringify({ x402Version: 1 }),
       },
       body: JSON.stringify({
-        originUrl: upstreamUrl,
+        originUrl: "https://api.example.com",
         price: "0.01",
-        walletAddress: "0xabc",
+        walletAddress: "0x1234567890123456789012345678901234567890",
       }),
     });
 
@@ -160,34 +174,48 @@ describe("integration", () => {
     const json = await response.json();
 
     expect(json.endpointId).toMatch(/^[A-Za-z0-9_-]{12}$/);
-    expect(json.proxyUrl).toBe(`${baseUrl}/p/${json.endpointId}/*`);
+    expect(json.status).toBe("pending_verification");
+    expect(json.verificationToken).toBeTruthy();
+    expect(json.verificationPath).toContain("/.well-known/x402-wrap-verification/");
     expect(redisData.get(`endpoint:${json.endpointId}`)).toBeTruthy();
   });
 
-  it("POST /register without payment returns 402", async () => {
-    const response = await fetch(`${baseUrl}/register`, {
+  it("POST /register-intent rejects blocked origins", async () => {
+    process.env.ALLOW_PRIVATE_ORIGINS = "false";
+
+    const response = await fetch(`${baseUrl}/register-intent`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ originUrl: upstreamUrl }),
-    });
-
-    expect(response.status).toBe(402);
-    expect(await response.json()).toMatchObject({ x402Version: 1 });
-  });
-
-  it("POST /register with payment but missing required fields returns 400", async () => {
-    verifyPaymentHeaderMock.mockResolvedValue({ isValid: true });
-
-    const response = await fetch(`${baseUrl}/register`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "X-PAYMENT": JSON.stringify({ x402Version: 1 }),
-      },
-      body: JSON.stringify({ originUrl: upstreamUrl }),
+      body: JSON.stringify({
+        originUrl: "http://localhost:8080",
+        price: "0.01",
+        walletAddress: "0x1234567890123456789012345678901234567890",
+      }),
     });
 
     expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: expect.stringContaining("not allowed") });
+    process.env.ALLOW_PRIVATE_ORIGINS = "true";
+  });
+
+  it("POST /activate before verification returns 409", async () => {
+    const createResponse = await fetch(`${baseUrl}/register-intent`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        originUrl: upstreamUrl,
+        price: "0.01",
+        walletAddress: "0x1234567890123456789012345678901234567890",
+      }),
+    });
+    const created = await createResponse.json();
+
+    const response = await fetch(`${baseUrl}/activate/${created.endpointId}`, { method: "POST" });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: expect.stringContaining("verification") });
   });
 
   it("GET unknown endpoint returns 404", async () => {
@@ -203,6 +231,8 @@ describe("integration", () => {
         price: "0.01",
         walletAddress: "0xabc",
         pathPattern: "*",
+        status: "active",
+        visibility: "public",
       }),
     );
 
@@ -223,6 +253,8 @@ describe("integration", () => {
         price: "0.01",
         walletAddress: "0xabc",
         pathPattern: "*",
+        status: "active",
+        visibility: "public",
       }),
     );
     verifyPaymentHeaderMock.mockResolvedValue({ isValid: true });
@@ -244,6 +276,8 @@ describe("integration", () => {
         price: "0.01",
         walletAddress: "0xabc",
         pathPattern: "*",
+        status: "active",
+        visibility: "public",
       }),
     );
     verifyPaymentHeaderMock.mockResolvedValue({ isValid: true });
@@ -281,6 +315,8 @@ describe("integration", () => {
         walletAddress: "0xabc",
         pathPattern: "*",
         encryptedHeaders: encryptHeaders({ "X-Origin-Key": "server-secret" }),
+        status: "active",
+        visibility: "public",
       }),
     );
     verifyPaymentHeaderMock.mockResolvedValue({ isValid: true });
@@ -291,5 +327,86 @@ describe("integration", () => {
 
     expect(response.status).toBe(200);
     expect(upstreamRequests[0].headers.get("x-origin-key")).toBe("server-secret");
+  });
+
+  it("verify then activate promotes an intent into an active endpoint", async () => {
+    verifyPaymentHeaderMock.mockResolvedValue({ isValid: true });
+
+    const createResponse = await fetch(`${baseUrl}/register-intent`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        originUrl: upstreamUrl,
+        price: "0.01",
+        walletAddress: "0x1234567890123456789012345678901234567890",
+      }),
+    });
+    const created = await createResponse.json();
+
+    const verifyResponse = await fetch(`${baseUrl}/verify/${created.endpointId}`, {
+      method: "POST",
+    });
+    expect(verifyResponse.status).toBe(200);
+    expect(await verifyResponse.json()).toMatchObject({ status: "pending_payment", verified: true });
+
+    const activateResponse = await fetch(`${baseUrl}/activate/${created.endpointId}`, {
+      method: "POST",
+      headers: {
+        "X-PAYMENT": JSON.stringify({ x402Version: 1 }),
+      },
+    });
+    expect(activateResponse.status).toBe(200);
+    const activated = await activateResponse.json();
+    expect(activated.status).toBe("active");
+    expect(activated.proxyUrl).toBe(`${baseUrl}/p/${created.endpointId}/*`);
+
+    const proxied = await fetch(`${baseUrl}/p/${created.endpointId}/ready`, {
+      headers: { "X-PAYMENT": JSON.stringify({ x402Version: 1 }) },
+    });
+    expect(proxied.status).toBe(200);
+  });
+
+  it("discovery only lists active public endpoints", async () => {
+    redisData.set(
+      "endpoint:public-active",
+      JSON.stringify({
+        originUrl: "https://public.example.com",
+        price: "0.02",
+        walletAddress: "0xabc",
+        pathPattern: "*",
+        status: "active",
+        visibility: "public",
+      }),
+    );
+    redisData.set(
+      "endpoint:private-active",
+      JSON.stringify({
+        originUrl: "https://private.example.com",
+        price: "0.02",
+        walletAddress: "0xabc",
+        pathPattern: "*",
+        status: "active",
+        visibility: "private",
+      }),
+    );
+    redisData.set(
+      "endpoint:pending",
+      JSON.stringify({
+        originUrl: "https://pending.example.com",
+        price: "0.02",
+        walletAddress: "0xabc",
+        pathPattern: "*",
+        status: "pending_verification",
+        visibility: "public",
+      }),
+    );
+
+    const response = await fetch(`${baseUrl}/.well-known/x402.json`);
+    expect(response.status).toBe(200);
+    const json = await response.json();
+    expect(json.endpoints).toHaveLength(1);
+    expect(json.endpoints[0]).toMatchObject({ endpointId: "public-active" });
   });
 });

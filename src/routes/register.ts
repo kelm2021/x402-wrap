@@ -1,18 +1,20 @@
 import { Hono } from "hono";
-import { nanoid } from "nanoid";
+import type { Context } from "hono";
 
 import { encryptHeaders } from "../lib/crypto.js";
-import { submitToBazaar } from "../lib/bazaar.js";
 import { getBaseUrl } from "../lib/env.js";
-import { saveEndpoint } from "../lib/redis.js";
-import { x402Middleware } from "../middleware/x402.js";
-import { registerEndpointOnChain } from "../lib/splitter.js";
+import { assertAllowedOrigin } from "../lib/origin-security.js";
+import { createRegistrationIntent } from "../lib/registration-intents.js";
+import { saveEndpointRecord } from "../lib/redis.js";
 import type { RegisterPayload } from "../lib/types.js";
 
-// Platform wallet — registration fee goes here
-const PLATFORM_WALLET = (process.env.PLATFORM_WALLET ?? "0x348Df429BD49A7506128c74CE1124A81B4B7dC9d") as `0x${string}`;
-const REGISTRATION_FEE = process.env.REGISTRATION_FEE ?? "2";
-const DEFAULT_FEE_BPS = parseInt(process.env.DEFAULT_FEE_BPS ?? "100", 10); // 1%
+export const PLATFORM_WALLET = (process.env.PLATFORM_WALLET ?? "0x348Df429BD49A7506128c74CE1124A81B4B7dC9d") as `0x${string}`;
+export const REGISTRATION_FEE = process.env.REGISTRATION_FEE ?? "2";
+export const DEFAULT_FEE_BPS = parseInt(process.env.DEFAULT_FEE_BPS ?? "100", 10);
+export const REGISTRATION_FEE_NUM = parseFloat(REGISTRATION_FEE);
+export const ONCHAIN_REGISTRATION_ENABLED = Boolean(
+  process.env.CONTRACT_ADDRESS && process.env.BACKEND_SIGNER_PRIVATE_KEY,
+);
 
 function hasStringRecord(value: unknown): value is Record<string, string> {
   return (
@@ -23,50 +25,50 @@ function hasStringRecord(value: unknown): value is Record<string, string> {
 }
 
 export const registerRoute = new Hono();
+export const registerIntentRoute = new Hono();
 
-const registrationMiddleware = parseFloat(REGISTRATION_FEE) > 0
-  ? x402Middleware(REGISTRATION_FEE, PLATFORM_WALLET, undefined, { forcePayTo: PLATFORM_WALLET })
-  : (_c: unknown, next: () => Promise<void>) => next();
-
-registerRoute.post("/", registrationMiddleware, async (c) => {
+async function handleRegisterIntent(c: Context) {
   const body = (await c.req.json().catch(() => null)) as RegisterPayload | null;
 
   if (!body?.originUrl || !body.price || !body.walletAddress) {
     return c.json({ error: "originUrl, price, walletAddress are required" }, 400);
   }
 
-  const endpointId = nanoid(12);
+  try {
+    assertAllowedOrigin(body.originUrl);
+  } catch (error) {
+    return c.json({ error: (error as Error).message.includes("allowed") ? (error as Error).message : `originUrl is not allowed: ${(error as Error).message}` }, 400);
+  }
+
   const encryptedHeaders =
     body.originHeaders && hasStringRecord(body.originHeaders)
       ? encryptHeaders(body.originHeaders)
       : undefined;
 
-  await saveEndpoint(endpointId, {
-    originUrl: body.originUrl,
-    price: body.price,
-    walletAddress: body.walletAddress,
+  const { endpointId, record } = createRegistrationIntent({
+    ...body,
     pathPattern: body.pathPattern ?? "*",
     encryptedHeaders,
   });
 
-  // Register endpoint on-chain before returning success so payTo/settlement routing stays consistent.
-  if (process.env.CONTRACT_ADDRESS && process.env.BACKEND_SIGNER_PRIVATE_KEY) {
-    try {
-      await registerEndpointOnChain(endpointId, body.walletAddress, DEFAULT_FEE_BPS);
-    } catch (err) {
-      console.error("[splitter] registerEndpoint on-chain failed:", err);
-      return c.json({ error: "Failed to register endpoint on-chain" }, 502);
-    }
-  }
+  await saveEndpointRecord(endpointId, record);
 
   const baseUrl = getBaseUrl();
-  const proxyUrl = `${baseUrl}/p/${endpointId}/*`;
-  void submitToBazaar(endpointId, proxyUrl, body.price);
 
   return c.json({
     endpointId,
-    proxyUrl,
-    discoveryUrl: `${baseUrl}/.well-known/x402.json`,
-    bazaarHint: "Endpoint discoverable via x402-wrap discovery catalog",
+    status: record.status,
+    visibility: record.visibility,
+    verificationToken: record.verificationToken,
+    verificationPath: record.verificationPath,
+    verificationUrl: `${new URL(body.originUrl).origin}${record.verificationPath}`,
+    activationUrl: `${baseUrl}/activate/${endpointId}`,
+    verificationApiUrl: `${baseUrl}/verify/${endpointId}`,
+    proxyUrl: `${baseUrl}/p/${endpointId}/*`,
   });
-});
+}
+
+registerIntentRoute.post("/", handleRegisterIntent);
+
+// Backward-compatible alias while the dashboard migrates.
+registerRoute.post("/", handleRegisterIntent);

@@ -5,12 +5,14 @@
 import { createWalletClient, createPublicClient, http, parseAbi } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { base, baseSepolia } from "viem/chains";
+import { decodePayment } from "x402/schemes";
 
 const CONTRACT_ADDRESS = (process.env.CONTRACT_ADDRESS ?? "") as `0x${string}`;
 const BACKEND_SIGNER_PRIVATE_KEY = (process.env.BACKEND_SIGNER_PRIVATE_KEY ?? "") as `0x${string}`;
 
 const ABI = parseAbi([
   "function registerEndpoint(bytes32 endpointId, address epOwner, uint16 feeBps) external",
+  "function registerEndpointWithAuthorization(bytes32 endpointId, address endpointOwner, uint16 proxyFeeBps, address from, uint256 value, uint256 validAfter, uint256 validBefore, bytes32 nonce, bytes signature) external",
   "function settle(bytes32 endpointId, address from, uint256 value, uint256 validAfter, uint256 validBefore, bytes32 nonce, bytes calldata signature) external",
 ]);
 
@@ -51,6 +53,48 @@ export async function registerEndpointOnChain(
   });
   await publicClient.waitForTransactionReceipt({ hash });
   console.log(`[splitter] registered endpoint ${endpointId} on-chain: ${hash}`);
+  return hash;
+}
+
+export async function registerEndpointWithAuthorizationOnChain(
+  endpointId: string,
+  ownerAddress: string,
+  feeBps: number,
+  paymentHeader: string,
+): Promise<string> {
+  const paymentPayload = decodePayment(paymentHeader) as {
+    payload: {
+      authorization: {
+        from: string;
+        value: string;
+        validAfter: string;
+        validBefore: string;
+        nonce: string;
+      };
+      signature: string;
+    };
+  };
+  const auth = paymentPayload.payload.authorization;
+  const signature = paymentPayload.payload.signature;
+  const { walletClient, publicClient } = getClients();
+  const hash = await walletClient.writeContract({
+    address: CONTRACT_ADDRESS,
+    abi: ABI,
+    functionName: "registerEndpointWithAuthorization",
+    args: [
+      endpointIdToBytes32(endpointId),
+      ownerAddress as `0x${string}`,
+      feeBps,
+      auth.from as `0x${string}`,
+      BigInt(auth.value),
+      BigInt(auth.validAfter),
+      BigInt(auth.validBefore),
+      auth.nonce as `0x${string}`,
+      signature as `0x${string}`,
+    ],
+  });
+  await publicClient.waitForTransactionReceipt({ hash });
+  console.log(`[splitter] registered endpoint ${endpointId} with on-chain registration fee: ${hash}`);
   return hash;
 }
 

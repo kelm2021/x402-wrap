@@ -9,7 +9,7 @@ export const discoveryRoute = new Hono();
 discoveryRoute.get("/", async (c) => {
   const baseUrl = getBaseUrl();
   const network = getNetwork();
-  const endpoints = await listAllEndpoints();
+  const endpoints = (await listAllEndpoints()).filter(({ config }) => config.status === "active" && config.visibility === "public");
 
   return c.json({
     version: "1.0",

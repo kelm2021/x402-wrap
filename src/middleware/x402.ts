@@ -6,7 +6,7 @@ import { useFacilitator } from "x402/verify";
 import { settleOnChain } from "../lib/splitter.js";
 
 const X402_VERSION = 1;
-const DEFAULT_NETWORK = "base-sepolia";
+const DEFAULT_NETWORK = "base";
 const DEFAULT_FACILITATOR_URL = "https://x402.org/facilitator";
 const CDP_FACILITATOR_URL = "https://api.cdp.coinbase.com/platform/v2/x402";
 const CDP_FACILITATOR_HOST = "api.cdp.coinbase.com";
@@ -131,7 +131,7 @@ function usdToAtomicUnits(price: string): string {
   return (wholeUnits + fractionalUnits).toString();
 }
 
-function buildPaymentRequirements(
+export function buildPaymentRequirements(
   price: string,
   walletAddress: string,
   resource: string,
@@ -157,7 +157,7 @@ function buildPaymentRequirements(
   };
 }
 
-function buildChallengeBody(
+export function buildChallengeBody(
   paymentRequirements: PaymentRequirements,
   error: string,
 ): X402ChallengeResponse {
@@ -277,7 +277,7 @@ export function x402Middleware(price: string, walletAddress: string, endpointId?
     await next();
 
     // Settle after successful request — submits the on-chain EIP-3009 transfer
-    // Skip settle for registration (forwarder handles USDC automatically)
+    // Registration route can opt out and run a custom on-chain register+fee flow.
     if (!opts?.skipSettle) {
       try {
         await x402Internals.settlePaymentHeader(paymentHeader, paymentRequirements, endpointId);
